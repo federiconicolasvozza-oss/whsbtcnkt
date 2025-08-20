@@ -23,8 +23,8 @@ const TAB_FOTOS  = (process.env.GOOGLE_SHEET_TAB_FOTOS  || "Fotos").trim();
 const GOOGLE_DRIVE_FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || "").trim() || null;
 const TMP_DIR = process.env.TMP_DIR || "tmp";
 
-const CLIENT_PATH = path.join(process.cwd(), "credentials", "oauth_client.json");
-const TOKEN_PATH  = path.join(process.cwd(), "credentials", "oauth_token.json");
+const CLIENT_PATH = path.join(process.cwd(), "/etc/secrets/oauth_client.json");
+const TOKEN_PATH  = path.join(process.cwd(), "/etc/secrets/oauth_token.json");
 
 /* ============ Estado en memoria por usuario ============ */
 /**
@@ -470,6 +470,7 @@ app.listen(PORT, () => {
   console.log("🔐 Token:", WHATSAPP_TOKEN ? WHATSAPP_TOKEN.slice(0, 10) + "..." : "(vacío)");
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
 });
+
 
 
 
