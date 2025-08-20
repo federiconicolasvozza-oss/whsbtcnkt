@@ -184,20 +184,20 @@ async function appendToSheetRange(a1, values) {
     requestBody: { values: [values] },
   });
 }
-async function recordRendir({ wa_id, op, importe, canal, estado = "registrado" }) {
-  await appendToSheetRange(`${TAB_RENDIR}!A1`, [
-    new Date().toISOString(),
-    wa_id, op, importe, canal, estado,
-  ]);
-}
-async function recordFotos({ wa_id, op, precinto, contenedor, driveFolderId, count, estado = "registrado" }) {
-  const link = driveFolderId ? `https://drive.google.com/drive/folders/${driveFolderId}` : "";
-  await appendToSheetRange(`${TAB_FOTOS}!A1`, [
-    new Date().toISOString(),
-    wa_id, op, precinto, contenedor, link, count || 0, estado,
-  ]);
-}
-console.log("✅ Rendir grabado en Sheets");
+async function saveRendirToSheets(wa_id, op, precinto, contenedor, link, count, estado) {
+  try {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SHEET_ID,
+      range: "Rendir!A:G",
+      valueInputOption: "RAW",
+      resource: {
+        values: [[
+          new Date().toISOString(),
+          wa_id, op, precinto, contenedor, link, count || 0, estado,
+        ]],
+      },
+    });
+    console.log("✅ Rendir grabado en Sheets");
   } catch (err) {
     console.error("❌ Error guardando en Sheets Rendir:", err);
   }
@@ -475,6 +475,7 @@ app.listen(PORT, () => {
   console.log("🔐 Token:", WHATSAPP_TOKEN ? WHATSAPP_TOKEN.slice(0, 10) + "..." : "(vacío)");
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
 });
+
 
 
 
