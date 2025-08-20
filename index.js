@@ -23,8 +23,18 @@ const TAB_FOTOS  = (process.env.GOOGLE_SHEET_TAB_FOTOS  || "Fotos").trim();
 const GOOGLE_DRIVE_FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || "").trim() || null;
 const TMP_DIR = process.env.TMP_DIR || "tmp";
 
-const CLIENT_PATH = "/etc/secrets/oauth_client.json";
-const TOKEN_PATH  = "/etc/secrets/oauth_token.json";
+/* ========= Rutas de credenciales (fallback /etc/secrets -> repo/credentials) ========= */
+function chooseCredPath(filename) {
+  const fromSecrets = path.join("/etc/secrets", filename); // Render Secret Files
+  const fromRepo    = path.join(process.cwd(), "credentials", filename); // Tu repo
+  try {
+    fs.accessSync(fromSecrets);
+    return fromSecrets;
+  } catch {}
+  return fromRepo;
+}
+const CLIENT_PATH = chooseCredPath("oauth_client.json");
+const TOKEN_PATH  = chooseCredPath("oauth_token.json");
 
 /* ============ Estado en memoria por usuario ============ */
 /**
@@ -153,6 +163,14 @@ function canalFromId(id) {
 
 /* ============ Google OAuth (Sheets & Drive) ============ */
 function getOAuthClient() {
+  const missing = [];
+  try { fs.accessSync(CLIENT_PATH); } catch { missing.push(CLIENT_PATH); }
+  try { fs.accessSync(TOKEN_PATH); }  catch { missing.push(TOKEN_PATH); }
+  if (missing.length) {
+    console.warn("⚠️ No se encuentran credenciales Google:", missing);
+    throw new Error("Faltan credenciales de Google");
+  }
+
   const { installed } = JSON.parse(fs.readFileSync(CLIENT_PATH, "utf-8"));
   const { client_id, client_secret, redirect_uris } = installed;
   const oauth2 = new google.auth.OAuth2(
@@ -174,33 +192,37 @@ function hasGoogle() {
   }
 }
 async function appendToSheetRange(a1, values) {
-  if (!hasGoogle()) return;
-  const auth = getOAuthClient();
-  const sheets = google.sheets({ version: "v4", auth });
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: GOOGLE_SHEETS_ID,
-    range: a1,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [values] },
-  });
-}
-async function saveRendirToSheets(wa_id, op, precinto, contenedor, link, count, estado) {
-  try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEET_ID,
-      range: "Rendir!A:G",
-      valueInputOption: "RAW",
-      resource: {
-        values: [[
-          new Date().toISOString(),
-          wa_id, op, precinto, contenedor, link, count || 0, estado,
-        ]],
-      },
-    });
-    console.log("✅ Rendir grabado en Sheets");
-  } catch (err) {
-    console.error("❌ Error guardando en Sheets Rendir:", err);
+  if (!hasGoogle()) {
+    console.warn("⚠️ Google deshabilitado (faltan credenciales o GOOGLE_SHEETS_ID)");
+    return;
   }
+  try {
+    const auth = getOAuthClient();
+    const sheets = google.sheets({ version: "v4", auth });
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range: a1,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [values] },
+    });
+  } catch (err) {
+    console.error("❌ Error al escribir en Sheets:", err?.response?.data || err);
+  }
+}
+async function recordRendir({ wa_id, op, importe, canal, estado = "registrado" }) {
+  await appendToSheetRange(`${TAB_RENDIR}!A1`, [
+    new Date().toISOString(),
+    wa_id, op, importe, canal, estado,
+  ]);
+  console.log("✅ Rendir grabado en Sheets");
+}
+async function recordFotos({ wa_id, op, precinto, contenedor, driveFolderId, count, estado = "registrado" }) {
+  const link = driveFolderId ? `https://drive.google.com/drive/folders/${driveFolderId}` : "";
+  await appendToSheetRange(`${TAB_FOTOS}!A1`, [
+    new Date().toISOString(),
+    wa_id, op, precinto, contenedor, link, count || 0, estado,
+  ]);
+  console.log("✅ Fotos registradas en Sheets");
 }
 async function createDriveFolder(name) {
   const auth = getOAuthClient();
@@ -329,20 +351,25 @@ app.post("/webhook", async (req, res) => {
       // Rendir: confirmar
       if (session.flow === "rendir" && session.step === "confirm_rendir") {
         if (btn === "rendir_si") {
-          await recordRendir({
-            wa_id: from,
-            op: session.data.op,
-            importe: session.data.importe,
-            canal: session.data.canal,
-            estado: "registrado",
-          });
-          await sendText(from, "✅ Operación registrada correctamente.");
+          try {
+            await recordRendir({
+              wa_id: from,
+              op: session.data.op,
+              importe: session.data.importe,
+              canal: session.data.canal,
+              estado: "registrado",
+            });
+            await sendText(from, "✅ Operación registrada correctamente.");
+          } catch (err) {
+            console.error("❌ Error en recordRendir:", err);
+            await sendText(from, "⚠️ No pude registrar en planilla. Intentalo más tarde.");
+          }
           sessions.delete(from);
-          await sendMenu(from);            // ⬅️ vuelve al menú
+          await sendMenu(from);            // vuelve al menú
         } else {
           await sendText(from, "❌ Operación cancelada.");
           sessions.delete(from);
-          await sendMenu(from);            // ⬅️ vuelve al menú
+          await sendMenu(from);            // vuelve al menú
         }
         return res.sendStatus(200);
       }
@@ -350,15 +377,22 @@ app.post("/webhook", async (req, res) => {
       // Fotos: confirmar
       if (session.flow === "fotos" && session.step === "confirm_fotos") {
         if (btn === "fotos_si") {
-          const folderName = `OP-${session.data.op}`;
-          const folder = await createDriveFolder(folderName);
-          session.data.folderId = folder.id;
-          session.step = "recibiendo_fotos";
-          await sendText(from, "Perfecto. 📷 Enviá las fotos. Cuando termines, escribí *listo* (o *volver* para menú).");
+          try {
+            const folderName = `OP-${session.data.op}`;
+            const folder = await createDriveFolder(folderName);
+            session.data.folderId = folder.id;
+            session.step = "recibiendo_fotos";
+            await sendText(from, "Perfecto. 📷 Enviá las fotos. Cuando termines, escribí *listo* (o *volver* para menú).");
+          } catch (err) {
+            console.error("❌ Error creando carpeta en Drive:", err);
+            await sendText(from, "⚠️ No pude preparar la carpeta en Drive. Probá más tarde.");
+            sessions.delete(from);
+            await sendMenu(from);
+          }
         } else {
           await sendText(from, "❌ Registro cancelado.");
           sessions.delete(from);
-          await sendMenu(from);            // ⬅️ vuelve al menú
+          await sendMenu(from);            // vuelve al menú
         }
         return res.sendStatus(200);
       }
@@ -372,7 +406,7 @@ app.post("/webhook", async (req, res) => {
     if (type === "text") {
       const body = (msg.text?.body || "").trim();
 
-      // Comandos (ahora incluye “menú” con tilde y “volver”)
+      // Comandos
       if (["hola","menu","menú","inicio","volver"].includes(body.toLowerCase())) {
         sessions.delete(from);
         await sendMenu(from);
@@ -403,7 +437,6 @@ app.post("/webhook", async (req, res) => {
           return res.sendStatus(200);
         }
         if (session.step === "confirm_rendir") {
-          // Si escribe en vez de tocar botón, re-mostramos confirmación
           await sendConfirmRendir(from, session.data);
           return res.sendStatus(200);
         }
@@ -435,18 +468,23 @@ app.post("/webhook", async (req, res) => {
         }
         if (session.step === "recibiendo_fotos") {
           if (body.toLowerCase() === "listo") {
-            await recordFotos({
-              wa_id: from,
-              op: session.data.op,
-              precinto: session.data.precinto,
-              contenedor: session.data.contenedor,
-              driveFolderId: session.data.folderId,
-              count: session.data.uploaded || 0,
-              estado: "registrado",
-            });
-            await sendText(from, "✅ Fotos registradas correctamente.");
+            try {
+              await recordFotos({
+                wa_id: from,
+                op: session.data.op,
+                precinto: session.data.precinto,
+                contenedor: session.data.contenedor,
+                driveFolderId: session.data.folderId,
+                count: session.data.uploaded || 0,
+                estado: "registrado",
+              });
+              await sendText(from, "✅ Fotos registradas correctamente.");
+            } catch (err) {
+              console.error("❌ Error registrando fotos en Sheets:", err);
+              await sendText(from, "⚠️ No pude registrar en planilla. Probá más tarde.");
+            }
             sessions.delete(from);
-            await sendMenu(from);          // ⬅️ vuelve al menú
+            await sendMenu(from);          // vuelve al menú
           } else {
             await sendText(from, "📷 Enviá imágenes, escribí *listo* para terminar, o *volver* para ir al menú.");
           }
@@ -474,7 +512,10 @@ app.listen(PORT, () => {
   console.log(`🚀 Bot corriendo en http://localhost:${PORT}`);
   console.log("🔐 Token:", WHATSAPP_TOKEN ? WHATSAPP_TOKEN.slice(0, 10) + "..." : "(vacío)");
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
+  console.log("📄 Credenciales usadas:", { CLIENT_PATH, TOKEN_PATH });
 });
+
+
 
 
 
