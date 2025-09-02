@@ -143,9 +143,9 @@ function sendContenedores(to) {
       body: { text: "Elegí el tipo de contenedor:" },
       action: {
         buttons: [
-          { type: "reply", reply: { id: "cont_20", title: "1×20' ST" } },
-          { type: "reply", reply: { id: "cont_40", title: "1×40' ST" } },
-          { type: "reply", reply: { id: "cont_40hc", title: "1×40' HC" } },
+          { type: "reply", reply: { id: "cont_20", title: "1×20 ST" } },
+          { type: "reply", reply: { id: "cont_40", title: "1×40 ST" } },
+          { type: "reply", reply: { id: "cont_40hc", title: "1×40 HC" } },
         ],
       },
     },
@@ -219,9 +219,9 @@ function tipoMaritimoFromId(id) {
 }
 
 function contenedorFromId(id) {
-  if (id === "cont_20") return "1×20' ST";
-  if (id === "cont_40") return "1×40' ST";
-  if (id === "cont_40hc") return "1×40' HC";
+  if (id === "cont_20") return "1×20 ST";
+  if (id === "cont_40") return "1×40 ST";
+  if (id === "cont_40hc") return "1×40 HC";
   return "";
 }
 
@@ -302,10 +302,10 @@ function calcularTarifa(data) {
   
   if (data.modo === 'maritimo') {
     if (data.maritimo_tipo === 'FCL') {
-      if (data.contenedor === '1×40' HC') {
+      if (data.contenedor === '1×40 HC') {
         tarifa = 3250;
         unidad = "por contenedor";
-      } else if (data.contenedor === '1×40' ST') {
+      } else if (data.contenedor === '1×40 ST') {
         tarifa = 3000;
         unidad = "por contenedor";
       } else { // 1x20
@@ -605,3 +605,4 @@ app.listen(PORT, () => {
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
   console.log("📄 Credenciales usadas:", { CLIENT_PATH, TOKEN_PATH });
 });
+
