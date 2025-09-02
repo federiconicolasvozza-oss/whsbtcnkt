@@ -1,4 +1,4 @@
-// index.js
+// index.js - Bot de Cotizaciones de Fletes (adaptado del original)
 import express from "express";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
-/* ===================== ENV ===================== */
+/* ===================== ENV (100% Compatible con el original) ===================== */
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || "botconektar123").trim();
 const WHATSAPP_TOKEN = (process.env.WHATSAPP_TOKEN || "").trim();
@@ -18,12 +18,13 @@ const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
 
 const GOOGLE_SHEETS_ID = (process.env.GOOGLE_SHEETS_ID || "").trim();
-const TAB_RENDIR = (process.env.GOOGLE_SHEET_TAB_RENDIR || "Rendir").trim();
-const TAB_FOTOS  = (process.env.GOOGLE_SHEET_TAB_FOTOS  || "Fotos").trim();
+// Reutilizamos las variables existentes pero las adaptamos para cotizaciones
+const TAB_COTIZACIONES = (process.env.GOOGLE_SHEET_TAB_RENDIR || "Cotizaciones").trim(); // Reutiliza la pestaña de Rendir
+const TAB_CONSULTAS = (process.env.GOOGLE_SHEET_TAB_FOTOS || "Consultas").trim(); // Reutiliza la pestaña de Fotos
 const GOOGLE_DRIVE_FOLDER_ID = (process.env.GOOGLE_DRIVE_FOLDER_ID || "").trim() || null;
 const TMP_DIR = process.env.TMP_DIR || "tmp";
 
-/* ========= Rutas de credenciales (fallback /etc/secrets -> repo/credentials) ========= */
+/* ========= Rutas de credenciales (CÓDIGO ORIGINAL SIN CAMBIOS) ========= */
 function chooseCredPath(filename) {
   const fromSecrets = path.join("/etc/secrets", filename); // Render Secret Files
   const fromRepo    = path.join(process.cwd(), "credentials", filename); // Tu repo
@@ -36,17 +37,17 @@ function chooseCredPath(filename) {
 const CLIENT_PATH = chooseCredPath("oauth_client.json");
 const TOKEN_PATH  = chooseCredPath("oauth_token.json");
 
-/* ============ Estado en memoria por usuario ============ */
+/* ============ Estado en memoria por usuario (adaptado para cotizaciones) ============ */
 /**
  * sessions[wa_id] = {
- *   flow: "rendir" | "fotos" | null,
+ *   flow: "cotizar" | "consultar" | null,
  *   step: string | null,
- *   data: { op, importe, canal, precinto, contenedor, folderId, uploaded }
+ *   data: { empresa, modo, maritimo_tipo, contenedor, origen_puerto, destino_puerto, etc. }
  * }
  */
 const sessions = new Map();
 
-/* ============ Helpers de WhatsApp ============ */
+/* ============ Helpers de WhatsApp (adaptados para cotizaciones) ============ */
 async function sendMessage(payload) {
   const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
   const res = await fetch(url, {
@@ -73,6 +74,7 @@ function sendText(to, body) {
   });
 }
 
+// NUEVO: Menú principal adaptado para cotizaciones
 function sendMenu(to) {
   return sendMessage({
     messaging_product: "whatsapp",
@@ -80,38 +82,90 @@ function sendMenu(to) {
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: "¿Qué necesitás hacer?" },
+      body: { text: "¡Bienvenido al Cotizador de Fletes de Conektar S.A.! 👋\n\n¿Qué necesitás hacer?" },
       action: {
         buttons: [
-          { type: "reply", reply: { id: "menu_rendir", title: "📋 Rendir operación" } },
-          { type: "reply", reply: { id: "menu_fotos",  title: "📸 Enviar fotos" } },
+          { type: "reply", reply: { id: "menu_cotizar", title: "💰 Cotizar flete" } },
+          { type: "reply", reply: { id: "menu_consultar", title: "📋 Consultar cotización" } },
         ],
       },
     },
   });
 }
 
-function sendCanales(to) {
+// NUEVO: Botones para seleccionar modo de transporte
+function sendModos(to) {
   return sendMessage({
     messaging_product: "whatsapp",
     to,
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: "¿Qué canal tuvo la operación?" },
+      body: { text: "¿Qué tipo de flete querés cotizar?" },
       action: {
         buttons: [
-          { type: "reply", reply: { id: "canal_rojo",    title: "🟥 Rojo" } },
-          { type: "reply", reply: { id: "canal_naranja", title: "🟧 Naranja" } },
-          { type: "reply", reply: { id: "canal_verde",   title: "🟩 Verde" } },
+          { type: "reply", reply: { id: "modo_maritimo", title: "🚢 Marítimo" } },
+          { type: "reply", reply: { id: "modo_aereo", title: "✈️ Aéreo" } },
+          { type: "reply", reply: { id: "modo_terrestre", title: "🚚 Terrestre" } },
         ],
       },
     },
   });
 }
 
-function sendConfirmRendir(to, { op, importe, canal }) {
-  const body = `🧾 Vas a rendir la operación *${op}*, gasto *$${importe}*, canal *${canal}*. ¿Confirmás?`;
+// NUEVO: Botones para tipo de flete marítimo
+function sendTiposMaritimo(to) {
+  return sendMessage({
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "Marítimo seleccionado. ¿Es carga consolidada (LCL) o contenedor completo (FCL)?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "mar_lcl", title: "LCL (Consolidado)" } },
+          { type: "reply", reply: { id: "mar_fcl", title: "FCL (Completo)" } },
+        ],
+      },
+    },
+  });
+}
+
+// NUEVO: Botones para tipo de contenedor FCL
+function sendContenedores(to) {
+  return sendMessage({
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "Elegí el tipo de contenedor:" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "cont_20", title: "1×20' ST" } },
+          { type: "reply", reply: { id: "cont_40", title: "1×40' ST" } },
+          { type: "reply", reply: { id: "cont_40hc", title: "1×40' HC" } },
+        ],
+      },
+    },
+  });
+}
+
+// NUEVO: Confirmación de cotización
+function sendConfirmCotizar(to, data) {
+  let detalle = "";
+  if (data.modo === 'maritimo') {
+    detalle += `• Tipo: ${data.maritimo_tipo || 'No definido'}\n`;
+    if (data.maritimo_tipo === 'FCL') detalle += `• Contenedor: ${data.contenedor || 'No definido'}\n`;
+    detalle += `• Ruta: ${data.origen_puerto || '?'} ➡️ ${data.destino_puerto || '?'}`;
+  } else if (data.modo === 'aereo') {
+    detalle += `• Ruta: ${data.origen_aeropuerto || '?'} ➡️ ${data.destino_aeropuerto || '?'}`;
+  } else if (data.modo === 'terrestre') {
+    detalle += `• Ruta: ${data.origen_direccion || '?'} ➡️ ${data.destino_direccion || '?'}`;
+  }
+
+  const body = `🧾 Revisá los datos:\n• Empresa: *${data.empresa}*\n• Modo: *${data.modo}*\n${detalle}\n\nIncoterm: FOB\n¿Confirmás para cotizar?`;
   return sendMessage({
     messaging_product: "whatsapp",
     to,
@@ -121,47 +175,57 @@ function sendConfirmRendir(to, { op, importe, canal }) {
       body: { text: body },
       action: {
         buttons: [
-          { type: "reply", reply: { id: "rendir_si", title: "✅ Sí" } },
-          { type: "reply", reply: { id: "rendir_no", title: "❌ No" } },
+          { type: "reply", reply: { id: "cotiz_si", title: "✅ Sí" } },
+          { type: "reply", reply: { id: "cotiz_no", title: "❌ No" } },
         ],
       },
     },
   });
 }
 
-function sendConfirmFotos(to, { op, precinto, contenedor }) {
-  const body = `🧾 Vas a registrar:\n• Operación: *${op}*\n• Precinto: *${precinto}*\n• Contenedor: *${contenedor}*\n¿Confirmás?`;
+// NUEVO: Upsell de despacho aduanero
+function sendUpsellDespacho(to) {
   return sendMessage({
     messaging_product: "whatsapp",
     to,
     type: "interactive",
     interactive: {
       type: "button",
-      body: { text: body },
+      body: { text: "¿Sabías que también ofrecemos despacho aduanero? ¿Te interesaría cotizarlo?" },
       action: {
         buttons: [
-          { type: "reply", reply: { id: "fotos_si", title: "✅ Sí" } },
-          { type: "reply", reply: { id: "fotos_no", title: "❌ No" } },
+          { type: "reply", reply: { id: "upsell_si", title: "Sí, cotizar" } },
+          { type: "reply", reply: { id: "upsell_no", title: "No, gracias" } },
         ],
       },
     },
   });
 }
 
-/* ============ Validaciones ============ */
-const isTenDigits = (v) => /^\d{10}$/.test(String(v).trim());
-const parseImporte = (v) => {
-  const n = Number(String(v).replace(",", "."));
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-function canalFromId(id) {
-  if (id === "canal_rojo") return "Rojo";
-  if (id === "canal_naranja") return "Naranja";
-  if (id === "canal_verde") return "Verde";
+/* ============ Validaciones (adaptadas) ============ */
+const isValidEmpresa = (v) => String(v).trim().length >= 2;
+
+function modoFromId(id) {
+  if (id === "modo_maritimo") return "maritimo";
+  if (id === "modo_aereo") return "aereo";
+  if (id === "modo_terrestre") return "terrestre";
   return "";
 }
 
-/* ============ Google OAuth (Sheets & Drive) ============ */
+function tipoMaritimoFromId(id) {
+  if (id === "mar_lcl") return "LCL";
+  if (id === "mar_fcl") return "FCL";
+  return "";
+}
+
+function contenedorFromId(id) {
+  if (id === "cont_20") return "1×20' ST";
+  if (id === "cont_40") return "1×40' ST";
+  if (id === "cont_40hc") return "1×40' HC";
+  return "";
+}
+
+/* ============ Google OAuth (CÓDIGO ORIGINAL SIN CAMBIOS) ============ */
 function getOAuthClient() {
   const missing = [];
   try { fs.accessSync(CLIENT_PATH); } catch { missing.push(CLIENT_PATH); }
@@ -182,6 +246,7 @@ function getOAuthClient() {
   oauth2.setCredentials(tokens);
   return oauth2;
 }
+
 function hasGoogle() {
   try {
     fs.accessSync(CLIENT_PATH);
@@ -191,6 +256,7 @@ function hasGoogle() {
     return false;
   }
 }
+
 async function appendToSheetRange(a1, values) {
   if (!hasGoogle()) {
     console.warn("⚠️ Google deshabilitado (faltan credenciales o GOOGLE_SHEETS_ID)");
@@ -209,77 +275,65 @@ async function appendToSheetRange(a1, values) {
     console.error("❌ Error al escribir en Sheets:", err?.response?.data || err);
   }
 }
-async function recordRendir({ wa_id, op, importe, canal, estado = "registrado" }) {
-  await appendToSheetRange(`${TAB_RENDIR}!A1`, [
+
+// NUEVO: Guardar cotización (reemplaza recordRendir)
+async function recordCotizacion({ wa_id, empresa, modo, maritimo_tipo, contenedor, origen, destino, tarifa, moneda, estado = "cotizado" }) {
+  await appendToSheetRange(`${TAB_COTIZACIONES}!A1`, [
     new Date().toISOString(),
-    wa_id, op, importe, canal, estado,
+    wa_id, empresa, modo, maritimo_tipo || "", contenedor || "", origen || "", destino || "", tarifa || 0, moneda || "USD", estado,
   ]);
-  console.log("✅ Rendir grabado en Sheets");
+  console.log("✅ Cotización grabada en Sheets");
 }
-async function recordFotos({ wa_id, op, precinto, contenedor, driveFolderId, count, estado = "registrado" }) {
-  const link = driveFolderId ? `https://drive.google.com/drive/folders/${driveFolderId}` : "";
-  await appendToSheetRange(`${TAB_FOTOS}!A1`, [
+
+// NUEVO: Guardar consulta (reemplaza recordFotos)
+async function recordConsulta({ wa_id, empresa, consulta, estado = "recibida" }) {
+  await appendToSheetRange(`${TAB_CONSULTAS}!A1`, [
     new Date().toISOString(),
-    wa_id, op, precinto, contenedor, link, count || 0, estado,
+    wa_id, empresa, consulta, "", "", "", "", 0, "", estado,
   ]);
-  console.log("✅ Fotos registradas en Sheets");
-}
-async function createDriveFolder(name) {
-  const auth = getOAuthClient();
-  const drive = google.drive({ version: "v3", auth });
-  const res = await drive.files.create({
-    resource: {
-      name,
-      mimeType: "application/vnd.google-apps.folder",
-      parents: GOOGLE_DRIVE_FOLDER_ID ? [GOOGLE_DRIVE_FOLDER_ID] : undefined,
-    },
-    fields: "id, webViewLink",
-  });
-  return res.data; // { id, webViewLink }
-}
-async function uploadToDrive(localPath, name, mimeType, folderId) {
-  const auth = getOAuthClient();
-  const drive = google.drive({ version: "v3", auth });
-  const res = await drive.files.create({
-    resource: { name, parents: folderId ? [folderId] : undefined },
-    media: { mimeType, body: fs.createReadStream(localPath) },
-    fields: "id, webViewLink",
-  });
-  return res.data; // { id, webViewLink }
+  console.log("✅ Consulta registrada en Sheets");
 }
 
-/* ============ Descarga de media WhatsApp ============ */
-async function downloadWhatsAppMedia(mediaId, filenameHint = "media") {
-  // 1) Obtener metadata (URL firmada)
-  const metaRes = await fetch(`https://graph.facebook.com/${API_VERSION}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
-  });
-  if (!metaRes.ok) throw new Error(await metaRes.text());
-  const meta = await metaRes.json(); // { url, mime_type, ... }
-
-  // 2) Descargar binario usando el mismo token
-  const binRes = await fetch(meta.url, {
-    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
-  });
-  if (!binRes.ok) throw new Error(await binRes.text());
-
-  // 3) Guardar temporalmente
-  fs.mkdirSync(TMP_DIR, { recursive: true });
-  const mime = meta.mime_type || "application/octet-stream";
-  const ext = mime.split("/")[1] || "bin";
-  const tmpPath = path.join(TMP_DIR, `${filenameHint}.${ext}`);
-  const buf = Buffer.from(await binRes.arrayBuffer());
-  fs.writeFileSync(tmpPath, buf);
-  return { tmpPath, mimeType: mime };
+// NUEVO: Motor de tarifas (placeholder)
+function calcularTarifa(data) {
+  console.log("Calculando tarifa para:", data);
+  let tarifa = 1000; // Tarifa base
+  let unidad = "";
+  
+  if (data.modo === 'maritimo') {
+    if (data.maritimo_tipo === 'FCL') {
+      if (data.contenedor === '1×40' HC') {
+        tarifa = 3250;
+        unidad = "por contenedor";
+      } else if (data.contenedor === '1×40' ST') {
+        tarifa = 3000;
+        unidad = "por contenedor";
+      } else { // 1x20
+        tarifa = 2100;
+        unidad = "por contenedor";
+      }
+    } else { // LCL
+      tarifa = 150;
+      unidad = "por CBM";
+    }
+  } else if (data.modo === 'aereo') {
+    tarifa = 4.5;
+    unidad = "por KG";
+  } else { // terrestre
+    tarifa = 800;
+    unidad = "por envío";
+  }
+  
+  return { valor: tarifa, moneda: "USD", unidad, validez_dias: 7 };
 }
 
-/* ============ Helpers de sesión ============ */
+/* ============ Helpers de sesión (CÓDIGO ORIGINAL SIN CAMBIOS) ============ */
 function getSession(wa_id) {
-  if (!sessions.has(wa_id)) sessions.set(wa_id, { flow: null, step: null, data: { uploaded: 0 } });
+  if (!sessions.has(wa_id)) sessions.set(wa_id, { flow: null, step: null, data: {} });
   return sessions.get(wa_id);
 }
 
-/* ============ Webhook Verify (GET) ============ */
+/* ============ Webhook Verify (GET - CÓDIGO ORIGINAL SIN CAMBIOS) ============ */
 app.get("/webhook", (req, res) => {
   const mode = String(req.query["hub.mode"] || "");
   const token = String(req.query["hub.verify_token"] || "");
@@ -293,7 +347,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-/* ============ Webhook Events (POST) ============ */
+/* ============ Webhook Events (POST - LÓGICA PRINCIPAL ADAPTADA) ============ */
 app.post("/webhook", async (req, res) => {
   try {
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
@@ -305,23 +359,9 @@ app.post("/webhook", async (req, res) => {
     const type = msg.type;
     const session = getSession(from);
 
-    // === Imagen (flujo fotos) ===
+    // === Imagen (para consultas futuras) ===
     if (type === "image") {
-      if (session.flow === "fotos" && session.step === "recibiendo_fotos" && session.data.folderId) {
-        try {
-          const mediaId = msg.image?.id;
-          const { tmpPath, mimeType } = await downloadWhatsAppMedia(mediaId, `OP-${session.data.op}-${Date.now()}`);
-          await uploadToDrive(tmpPath, path.basename(tmpPath), mimeType, session.data.folderId);
-          fs.unlink(tmpPath, () => {});
-          session.data.uploaded = (session.data.uploaded || 0) + 1;
-          await sendText(from, `📷 Foto subida (${session.data.uploaded}). Enviá más o escribí *listo* (o *volver* para menú).`);
-        } catch (e) {
-          console.error("💥 Error subiendo imagen:", e);
-          await sendText(from, "⚠️ No pude subir esa imagen. Probá de nuevo.");
-        }
-      } else {
-        await sendText(from, "✅ Imagen recibida. Para *enviar fotos*, elegí esa opción en el menú.");
-      }
+      await sendText(from, "✅ Imagen recibida. Para consultas específicas, usá la opción *Consultar cotización* del menú.");
       return res.sendStatus(200);
     }
 
@@ -329,71 +369,103 @@ app.post("/webhook", async (req, res) => {
     if (type === "interactive") {
       const btn = msg?.interactive?.button_reply?.id;
 
-      // Menu principal
-      if (btn === "menu_rendir") {
-        sessions.set(from, { flow: "rendir", step: "op", data: {} });
-        await sendText(from, "📌 Por favor, indicá el número de operación (10 dígitos).");
+      // Menú principal
+      if (btn === "menu_cotizar") {
+        sessions.set(from, { flow: "cotizar", step: "empresa", data: {} });
+        await sendText(from, "📌 Para empezar, decime el nombre de tu empresa.");
         return res.sendStatus(200);
       }
-      if (btn === "menu_fotos") {
-        sessions.set(from, { flow: "fotos", step: "op", data: { uploaded: 0 } });
-        await sendText(from, "📌 Indicá el número de operación (10 dígitos).");
+      if (btn === "menu_consultar") {
+        sessions.set(from, { flow: "consultar", step: "empresa", data: {} });
+        await sendText(from, "📌 Decime el nombre de tu empresa para registrar tu consulta.");
         return res.sendStatus(200);
       }
 
-      // Rendir: canal
-      if (session.flow === "rendir" && ["canal_rojo","canal_naranja","canal_verde"].includes(btn)) {
-        session.data.canal = canalFromId(btn);
-        session.step = "confirm_rendir";
-        await sendConfirmRendir(from, session.data);
-        return res.sendStatus(200);
-      }
-      // Rendir: confirmar
-      if (session.flow === "rendir" && session.step === "confirm_rendir") {
-        if (btn === "rendir_si") {
-          try {
-            await recordRendir({
-              wa_id: from,
-              op: session.data.op,
-              importe: session.data.importe,
-              canal: session.data.canal,
-              estado: "registrado",
-            });
-            await sendText(from, "✅ Operación registrada correctamente.");
-          } catch (err) {
-            console.error("❌ Error en recordRendir:", err);
-            await sendText(from, "⚠️ No pude registrar en planilla. Intentalo más tarde.");
-          }
-          sessions.delete(from);
-          await sendMenu(from);            // vuelve al menú
-        } else {
-          await sendText(from, "❌ Operación cancelada.");
-          sessions.delete(from);
-          await sendMenu(from);            // vuelve al menú
+      // Cotizar: modo de transporte
+      if (session.flow === "cotizar" && ["modo_maritimo","modo_aereo","modo_terrestre"].includes(btn)) {
+        session.data.modo = modoFromId(btn);
+        if (session.data.modo === 'maritimo') {
+          session.step = "maritimo_tipo";
+          await sendTiposMaritimo(from);
+        } else if (session.data.modo === 'aereo') {
+          session.step = "aereo_ruta";
+          await sendText(from, "✈️ Indicá AEROPUERTO de ORIGEN y DESTINO (código IATA o ciudad).\n\nEjemplo:\nORIGEN: PVG (Shanghai)\nDESTINO: EZE (Buenos Aires)");
+        } else { // terrestre
+          session.step = "terrestre_ruta";
+          await sendText(from, "🚚 Indicá ORIGEN y DESTINO con ciudad y país.\n\nEjemplo:\nORIGEN: Sao Paulo, Brasil\nDESTINO: Buenos Aires, Argentina");
         }
         return res.sendStatus(200);
       }
 
-      // Fotos: confirmar
-      if (session.flow === "fotos" && session.step === "confirm_fotos") {
-        if (btn === "fotos_si") {
+      // Cotizar: tipo marítimo
+      if (session.flow === "cotizar" && ["mar_lcl","mar_fcl"].includes(btn)) {
+        session.data.maritimo_tipo = tipoMaritimoFromId(btn);
+        if (session.data.maritimo_tipo === 'FCL') {
+          session.step = "contenedor";
+          await sendContenedores(from);
+        } else { // LCL
+          session.step = "maritimo_ruta";
+          await sendText(from, "🚢 Indicá PUERTO de ORIGEN y DESTINO.\n\nEjemplo:\nORIGEN: Shanghai, China\nDESTINO: Buenos Aires, Argentina");
+        }
+        return res.sendStatus(200);
+      }
+
+      // Cotizar: contenedor
+      if (session.flow === "cotizar" && ["cont_20","cont_40","cont_40hc"].includes(btn)) {
+        session.data.contenedor = contenedorFromId(btn);
+        session.step = "maritimo_ruta";
+        await sendText(from, "🚢 Indicá PUERTO de ORIGEN y DESTINO.\n\nEjemplo:\nORIGEN: Shanghai, China\nDESTINO: Buenos Aires, Argentina");
+        return res.sendStatus(200);
+      }
+
+      // Cotizar: confirmar
+      if (session.flow === "cotizar" && session.step === "confirm_cotizar") {
+        if (btn === "cotiz_si") {
           try {
-            const folderName = `OP-${session.data.op}`;
-            const folder = await createDriveFolder(folderName);
-            session.data.folderId = folder.id;
-            session.step = "recibiendo_fotos";
-            await sendText(from, "Perfecto. 📷 Enviá las fotos. Cuando termines, escribí *listo* (o *volver* para menú).");
+            const tarifaInfo = calcularTarifa(session.data);
+            const origen = session.data.origen_puerto || session.data.origen_aeropuerto || session.data.origen_direccion;
+            const destino = session.data.destino_puerto || session.data.destino_aeropuerto || session.data.destino_direccion;
+            
+            await recordCotizacion({
+              wa_id: from,
+              empresa: session.data.empresa,
+              modo: session.data.modo,
+              maritimo_tipo: session.data.maritimo_tipo,
+              contenedor: session.data.contenedor,
+              origen: origen,
+              destino: destino,
+              tarifa: tarifaInfo.valor,
+              moneda: tarifaInfo.moneda,
+              estado: "cotizado",
+            });
+            
+            const tarifaMsg = `✅ *Tarifa estimada:*\n${tarifaInfo.moneda} ${tarifaInfo.valor} ${tarifaInfo.unidad} (FOB)\n\n*Validez:* ${tarifaInfo.validez_dias} días\n*Nota:* No incluye impuestos ni gastos locales.`;
+            await sendText(from, tarifaMsg);
+            
+            sessions.delete(from);
+            await sendUpsellDespacho(from);
           } catch (err) {
-            console.error("❌ Error creando carpeta en Drive:", err);
-            await sendText(from, "⚠️ No pude preparar la carpeta en Drive. Probá más tarde.");
+            console.error("❌ Error en recordCotizacion:", err);
+            await sendText(from, "⚠️ No pude registrar la cotización. Intentá más tarde.");
             sessions.delete(from);
             await sendMenu(from);
           }
         } else {
-          await sendText(from, "❌ Registro cancelado.");
+          await sendText(from, "❌ Cotización cancelada.");
           sessions.delete(from);
-          await sendMenu(from);            // vuelve al menú
+          await sendMenu(from);
         }
+        return res.sendStatus(200);
+      }
+
+      // Upsell despacho
+      if (["upsell_si","upsell_no"].includes(btn)) {
+        if (btn === "upsell_si") {
+          await sendText(from, "¡Excelente! Para cotizar el despacho aduanero, contactate con nuestro equipo comercial:\n📧 comercial@conektar.com\n📱 Respondé a este mensaje para que un representante te asista.");
+        } else {
+          await sendText(from, "Entendido. ¡Gracias por cotizar con Conektar S.A.! 👋\n\nEscribí *menu* cuando necesites una nueva cotización.");
+        }
+        sessions.delete(from);
         return res.sendStatus(200);
       }
 
@@ -406,100 +478,119 @@ app.post("/webhook", async (req, res) => {
     if (type === "text") {
       const body = (msg.text?.body || "").trim();
 
-      // Comandos
-      if (["hola","menu","menú","inicio","volver"].includes(body.toLowerCase())) {
+      // Comandos globales
+      if (["hola","menu","menú","inicio","volver","cotizar"].includes(body.toLowerCase())) {
         sessions.delete(from);
         await sendMenu(from);
         return res.sendStatus(200);
       }
 
-      // Flow: RENDIR
-      if (session.flow === "rendir") {
-        if (session.step === "op") {
-          if (!isTenDigits(body)) {
-            await sendText(from, "⚠️ El número debe tener exactamente 10 dígitos. Intentá de nuevo.");
+      // Flow: COTIZAR
+      if (session.flow === "cotizar") {
+        if (session.step === "empresa") {
+          if (!isValidEmpresa(body)) {
+            await sendText(from, "⚠️ Por favor, ingresá un nombre de empresa válido (mínimo 2 caracteres).");
           } else {
-            session.data.op = body;
-            session.step = "importe";
-            await sendText(from, "💰 ¿Cuál fue el importe total de los gastos?");
+            session.data.empresa = body;
+            session.step = "modo";
+            await sendModos(from);
           }
           return res.sendStatus(200);
         }
-        if (session.step === "importe") {
-          const n = parseImporte(body);
-          if (n === null) {
-            await sendText(from, "⚠️ Ingresá un importe válido (número positivo).");
+        
+        if (session.step === "maritimo_ruta") {
+          // Extraer origen y destino del texto
+          const origenMatch = body.match(/ORIGEN:\s*(.+?)(?:\n|DESTINO:)/i);
+          const destinoMatch = body.match(/DESTINO:\s*(.+)/i);
+          
+          if (origenMatch && destinoMatch) {
+            session.data.origen_puerto = origenMatch[1].trim();
+            session.data.destino_puerto = destinoMatch[1].trim();
+            session.step = "confirm_cotizar";
+            await sendConfirmCotizar(from, session.data);
           } else {
-            session.data.importe = n;
-            session.step = "canal";
-            await sendCanales(from);
+            await sendText(from, "⚠️ Por favor, seguí el formato:\nORIGEN: [puerto/ciudad]\nDESTINO: [puerto/ciudad]");
           }
           return res.sendStatus(200);
         }
-        if (session.step === "confirm_rendir") {
-          await sendConfirmRendir(from, session.data);
+        
+        if (session.step === "aereo_ruta") {
+          const origenMatch = body.match(/ORIGEN:\s*(.+?)(?:\n|DESTINO:)/i);
+          const destinoMatch = body.match(/DESTINO:\s*(.+)/i);
+          
+          if (origenMatch && destinoMatch) {
+            session.data.origen_aeropuerto = origenMatch[1].trim();
+            session.data.destino_aeropuerto = destinoMatch[1].trim();
+            session.step = "confirm_cotizar";
+            await sendConfirmCotizar(from, session.data);
+          } else {
+            await sendText(from, "⚠️ Por favor, seguí el formato:\nORIGEN: [aeropuerto/ciudad]\nDESTINO: [aeropuerto/ciudad]");
+          }
+          return res.sendStatus(200);
+        }
+        
+        if (session.step === "terrestre_ruta") {
+          const origenMatch = body.match(/ORIGEN:\s*(.+?)(?:\n|DESTINO:)/i);
+          const destinoMatch = body.match(/DESTINO:\s*(.+)/i);
+          
+          if (origenMatch && destinoMatch) {
+            session.data.origen_direccion = origenMatch[1].trim();
+            session.data.destino_direccion = destinoMatch[1].trim();
+            session.step = "confirm_cotizar";
+            await sendConfirmCotizar(from, session.data);
+          } else {
+            await sendText(from, "⚠️ Por favor, seguí el formato:\nORIGEN: [ciudad, país]\nDESTINO: [ciudad, país]");
+          }
+          return res.sendStatus(200);
+        }
+        
+        if (session.step === "confirm_cotizar") {
+          await sendConfirmCotizar(from, session.data);
           return res.sendStatus(200);
         }
       }
 
-      // Flow: FOTOS
-      if (session.flow === "fotos") {
-        if (session.step === "op") {
-          if (!isTenDigits(body)) {
-            await sendText(from, "⚠️ El número debe tener exactamente 10 dígitos. Intentá de nuevo.");
+      // Flow: CONSULTAR
+      if (session.flow === "consultar") {
+        if (session.step === "empresa") {
+          if (!isValidEmpresa(body)) {
+            await sendText(from, "⚠️ Por favor, ingresá un nombre de empresa válido (mínimo 2 caracteres).");
           } else {
-            session.data.op = body;
-            session.step = "precinto";
-            await sendText(from, "🔐 ¿Cuál es el número de precinto?");
+            session.data.empresa = body;
+            session.step = "consulta";
+            await sendText(from, "📝 Escribí tu consulta o pregunta sobre fletes y logística.");
           }
           return res.sendStatus(200);
         }
-        if (session.step === "precinto") {
-          session.data.precinto = body;
-          session.step = "contenedor";
-          await sendText(from, "🚢 ¿Cuál es el número de contenedor?");
-          return res.sendStatus(200);
-        }
-        if (session.step === "contenedor") {
-          session.data.contenedor = body;
-          session.step = "confirm_fotos";
-          await sendConfirmFotos(from, session.data);
-          return res.sendStatus(200);
-        }
-        if (session.step === "recibiendo_fotos") {
-          if (body.toLowerCase() === "listo") {
-            try {
-              await recordFotos({
-                wa_id: from,
-                op: session.data.op,
-                precinto: session.data.precinto,
-                contenedor: session.data.contenedor,
-                driveFolderId: session.data.folderId,
-                count: session.data.uploaded || 0,
-                estado: "registrado",
-              });
-              await sendText(from, "✅ Fotos registradas correctamente.");
-            } catch (err) {
-              console.error("❌ Error registrando fotos en Sheets:", err);
-              await sendText(from, "⚠️ No pude registrar en planilla. Probá más tarde.");
-            }
+        
+        if (session.step === "consulta") {
+          try {
+            await recordConsulta({
+              wa_id: from,
+              empresa: session.data.empresa,
+              consulta: body,
+              estado: "recibida",
+            });
+            await sendText(from, "✅ Tu consulta ha sido registrada correctamente.\n\nNuestro equipo comercial te contactará pronto para darte una respuesta personalizada.\n\n📧 comercial@conektar.com");
             sessions.delete(from);
-            await sendMenu(from);          // vuelve al menú
-          } else {
-            await sendText(from, "📷 Enviá imágenes, escribí *listo* para terminar, o *volver* para ir al menú.");
+            await sendMenu(from);
+          } catch (err) {
+            console.error("❌ Error en recordConsulta:", err);
+            await sendText(from, "⚠️ No pude registrar tu consulta. Intentá más tarde.");
+            sessions.delete(from);
+            await sendMenu(from);
           }
           return res.sendStatus(200);
         }
       }
 
-      // Desvíos
-      await sendText(from, "Solo puedo ayudarte a *rendir una operación* o *enviar fotos de carga*. ¿Qué necesitás hacer?");
-      await sendMenu(from);
+      // Mensaje por defecto
+      await sendText(from, "No entendí esa parte. Escribí *menu* para ver las opciones disponibles.");
       return res.sendStatus(200);
     }
 
     // Otros tipos no soportados
-    await sendText(from, "ℹ️ Tipo de mensaje no soportado aún. Escribí *menu* para opciones.");
+    await sendText(from, "ℹ️ Tipo de mensaje no soportado. Escribí *menu* para ver las opciones.");
     return res.sendStatus(200);
   } catch (e) {
     console.error("💥 Webhook error:", e);
@@ -507,25 +598,10 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-/* ============ Start ============ */
+/* ============ Start (CÓDIGO ORIGINAL SIN CAMBIOS) ============ */
 app.listen(PORT, () => {
   console.log(`🚀 Bot corriendo en http://localhost:${PORT}`);
   console.log("🔐 Token:", WHATSAPP_TOKEN ? WHATSAPP_TOKEN.slice(0, 10) + "..." : "(vacío)");
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
   console.log("📄 Credenciales usadas:", { CLIENT_PATH, TOKEN_PATH });
 });
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
