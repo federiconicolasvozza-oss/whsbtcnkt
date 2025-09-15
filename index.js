@@ -18,20 +18,23 @@ const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
 
 const GOOGLE_SHEETS_ID = (process.env.GOOGLE_SHEETS_ID || "").trim();
-const PRODUCT_MATRIX_TAB = (process.env.PRODUCT_MATRIX_TAB || "Hoja1").trim();
+// Limpieza robusta: si accidentalmente pegaste la URL después del nombre, la corta.
+const PRODUCT_MATRIX_TAB_RAW = (process.env.PRODUCT_MATRIX_TAB || "Hoja1")
+  .replace(/https?:\/\/.*/i, "")
+  .trim();
 
 const TAB_CALCULOS = (process.env.TAB_CALCULOS || "Calculos").trim();
 
 const INSURANCE_RATE = Number(process.env.INSURANCE_RATE ?? 0.01);       // 1% FOB
 const TASA_ESTATISTICA = Number(process.env.TASA_ESTATISTICA ?? 0);      // 0..0.03
 
-// Estimadores de flete (pueden tunearse por ENV)
-const RATE_AIR_PER_KG   = Number(process.env.RATE_AIR_PER_KG   ?? 5.5);
-const RATE_COURIER_PER_KG = Number(process.env.RATE_COURIER_PER_KG ?? 9.0);
-const RATE_LCL_PER_CBM  = Number(process.env.RATE_LCL_PER_CBM  ?? 150);
-const RATE_FCL_20       = Number(process.env.RATE_FCL_20       ?? 2100);
-const RATE_FCL_40       = Number(process.env.RATE_FCL_40       ?? 3000);
-const RATE_FCL_40HC     = Number(process.env.RATE_FCL_40HC     ?? 3250);
+// Estimadores de flete (tuneables por ENV)
+const RATE_AIR_PER_KG       = Number(process.env.RATE_AIR_PER_KG       ?? 5.5);
+const RATE_COURIER_PER_KG   = Number(process.env.RATE_COURIER_PER_KG   ?? 9.0);
+const RATE_LCL_PER_CBM      = Number(process.env.RATE_LCL_PER_CBM      ?? 150);
+const RATE_FCL_20           = Number(process.env.RATE_FCL_20           ?? 2100);
+const RATE_FCL_40           = Number(process.env.RATE_FCL_40           ?? 3000);
+const RATE_FCL_40HC         = Number(process.env.RATE_FCL_40HC         ?? 3250);
 
 /* ========= Credenciales Google (misma base) ========= */
 function chooseCredPath(filename) {
@@ -52,8 +55,8 @@ const TOKEN_PATH  = chooseCredPath("oauth_token.json");
  *     empresa, producto_desc, categoria,
  *     fob_unit, cantidad, fob_total,
  *     peso_kg, vol_cbm,
- *     modo, contenedor, // si aplica
- *     matriz: { iva, iva_adic, di, iibb, internos, notas },
+ *     modo, contenedor,
+ *     matriz: { iva, iva_adic, di, iibb, internos, notas, categoria },
  *     resultado: {...}
  *   }
  * }
@@ -126,11 +129,7 @@ function sendProductoMetodo(to) {
   });
 }
 function sendCategoriaLista(to, categorias = []) {
-  // WhatsApp List máx ~10 rows por sección
-  const rows = categorias.slice(0, 10).map(c => ({
-    id: `cat_${c}`,
-    title: c,
-  }));
+  const rows = categorias.slice(0, 10).map(c => ({ id: `cat_${c}`, title: c }));
   return sendMessage({
     messaging_product: "whatsapp",
     to,
@@ -138,10 +137,7 @@ function sendCategoriaLista(to, categorias = []) {
     interactive: {
       type: "list",
       body: { text: "Elegí la categoría que más se acerque:" },
-      action: {
-        button: "Seleccionar",
-        sections: [{ title: "Categorías", rows }]
-      }
+      action: { button: "Seleccionar", sections: [{ title: "Categorías", rows }] }
     }
   });
 }
@@ -235,7 +231,7 @@ const toNum = (s) => {
 };
 const fmt = (n) => (isFinite(n) ? Number(n).toFixed(2) : "0.00");
 
-/* ============ Google helpers (misma base + lectura matriz) ============ */
+/* ============ Google helpers (misma base + lectura matriz robusta) ============ */
 function getOAuthClient() {
   const missing = [];
   try { fs.accessSync(CLIENT_PATH); } catch { missing.push(CLIENT_PATH); }
@@ -280,15 +276,29 @@ async function readMatrix() {
   try {
     const auth = getOAuthClient();
     const sheets = google.sheets({ version: "v4", auth });
-    const range = `${PRODUCT_MATRIX_TAB}!A1:Z1000`;
-    const resp = await sheets.spreadsheets.values.get({ spreadsheetId: GOOGLE_SHEETS_ID, range });
+
+    // Quitar comillas externas si vienen y decidir si hay que envolver con comillas
+    const rawTab = PRODUCT_MATRIX_TAB_RAW.replace(/^'+|'+$/g, "");
+    const needsQuotes = /[^A-Za-z0-9_]/.test(rawTab); // espacios, acentos, guiones, etc.
+    const tabForRange = needsQuotes ? `'${rawTab}'` : rawTab;
+    const range = `${tabForRange}!A1:Z1000`;
+
+    console.log("📘 Leyendo matriz de Google en rango:", range);
+
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId: GOOGLE_SHEETS_ID,
+      range
+    });
     const rows = resp.data.values || [];
     if (!rows.length) return null;
+
     const header = rows[0].map(h => (h || "").toString().trim());
-    const idx = (name) => header.findIndex(h => h.toLowerCase() === name.toLowerCase());
+    const idx = (name) =>
+      header.findIndex(h => h.toLowerCase() === name.toLowerCase());
+
     const map = [];
     for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
+      const r = rows[i] || [];
       const rec = {
         NIVEL_1: r[idx("NIVEL_1")] || "",
         NIVEL_2: r[idx("NIVEL_2")] || "",
@@ -309,11 +319,11 @@ async function readMatrix() {
     return map;
   } catch (e) {
     console.warn("⚠️ No pude leer matriz de Google:", e.message);
-    return null;
+    return null; // deja que el flujo use el fallback
   }
 }
 
-/* Fallback básico de categorías si no hay Google */
+/* Fallback básico si no hay Google */
 const MATRIX_FALLBACK = [
   { categoria: "Electrodomésticos", iva: 0.21, iva_adic: 0.00, di: 0.20, iibb: 0.035, internos: 0.00, notas: "Pequeños electrodomésticos usualmente 0% internos." },
   { categoria: "Electrónica y Electricidad", iva: 0.21, iva_adic: 0.00, di: 0.16, iibb: 0.035, internos: 0.00, notas: "Teléfonos podrían tener internos 17%." },
@@ -339,7 +349,6 @@ async function findCategoryRecord({ categoria, descripcion }) {
     const exact = M.find(r => norm(r.categoria) === c);
     if (exact) return { ...exact, categoria: exact.categoria };
   }
-  // heurística simple por palabras clave en descripción
   const d = norm(descripcion);
   if (d) {
     const score = (r) => {
@@ -353,7 +362,7 @@ async function findCategoryRecord({ categoria, descripcion }) {
     }
     if (best) return { ...best, categoria: best.categoria };
   }
-  return M[0]; // fallback
+  return M[0];
 }
 
 /* ============ Registro del cálculo ============ */
@@ -379,7 +388,7 @@ function estimarFlete({ modo, vol_cbm = 0, peso_kg = 0, contenedor = "" }) {
   if (modo === "aereo") {
     const charge = Math.max(peso_kg, vol_cbm * 167);
     return charge * RATE_AIR_PER_KG;
-  }
+    }
   if (modo === "courier") {
     return Math.max(peso_kg, vol_cbm * 200) * RATE_COURIER_PER_KG;
   }
@@ -425,7 +434,7 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
-/* ============ WEBHOOK EVENTS (nuevo flujo calc) ============ */
+/* ============ WEBHOOK EVENTS (flujo calc) ============ */
 app.post("/webhook", async (req, res) => {
   try {
     const change = req.body?.entry?.[0]?.changes?.[0]?.value;
@@ -447,7 +456,7 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // Imágenes/documentos no se usan en este flujo
+    // No usamos medios en este flujo
     if (type !== "text" && type !== "interactive") {
       await sendText(from, "ℹ️ Mensaje no soportado. Escribí *inicio* para comenzar.");
       return res.sendStatus(200);
@@ -458,7 +467,7 @@ app.post("/webhook", async (req, res) => {
       const btnId = msg?.interactive?.button_reply?.id || msg?.interactive?.list_reply?.id;
 
       if (btnId === "start_info") {
-        await sendText(from, "Te pedimos datos básicos (producto, FOB, cantidad, peso/volumen). Calculamos DI, IVA, etc. El resultado es estimado y no reemplaza la cotización formal por NCM específico.");
+        await sendText(from, "Pedimos datos básicos (producto, FOB, cantidad, peso/volumen). Calculamos DI, IVA, etc. El resultado es estimado y puede variar según NCM/jurisdicción.");
         await sendStart(from);
         return res.sendStatus(200);
       }
@@ -513,7 +522,6 @@ app.post("/webhook", async (req, res) => {
         }
 
         if (btnId === "calc_ok" && session.step === "confirm") {
-          // Ejecutar cálculo
           const out = calcularCostos({
             fob_total: session.data.fob_total,
             modo: session.data.modo,
@@ -546,10 +554,9 @@ Internos (${(m.internos*100||0).toFixed(1)}%): USD ${fmt(r.internos)}
 
 Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y jurisdicción IIBB."}
 `;
-
           await sendText(from, resumen);
 
-          // Registrar en Sheets
+          // Registrar en Sheets (si hay credenciales)
           try {
             await recordCalculo({
               wa_id: from,
@@ -577,14 +584,12 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
         }
 
         if (btnId === "calc_edit" && session.step === "confirm") {
-          // Volvemos a elegir modo
           session.step = "modo";
           await sendModos(from);
           return res.sendStatus(200);
         }
       }
 
-      // fallback
       await sendStart(from);
       return res.sendStatus(200);
     }
@@ -592,9 +597,9 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
     /* ====== TEXTO ====== */
     if (type === "text") {
       const bodyRaw = (msg.text?.body || "").trim();
-      const body = bodyRaw;
+      const bodyLow = bodyRaw.toLowerCase();
 
-      if (["hola","menu","menú","inicio","volver","start"].includes(body.toLowerCase())) {
+      if (["hola","menu","menú","inicio","volver","start"].includes(bodyLow)) {
         sessions.delete(from);
         await sendStart(from);
         return res.sendStatus(200);
@@ -602,17 +607,16 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
 
       const session = getSession(from);
       if (session.flow !== "calc") {
-        // no hay flujo → ofrecer inicio
         await sendStart(from);
         return res.sendStatus(200);
       }
 
       // Empresa
       if (session.step === "empresa") {
-        if (!isValidEmpresa(body)) {
+        if (!isValidEmpresa(bodyRaw)) {
           await sendText(from, "⚠️ Ingresá un nombre de empresa válido (mínimo 2 caracteres).");
         } else {
-          session.data.empresa = body;
+          session.data.empresa = bodyRaw;
           session.step = "producto_metodo";
           await sendProductoMetodo(from);
         }
@@ -621,9 +625,8 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
 
       // Producto por texto
       if (session.step === "producto_texto") {
-        session.data.producto_desc = body;
-        // buscar categoría en matriz
-        const rec = await findCategoryRecord({ descripcion: body });
+        session.data.producto_desc = bodyRaw;
+        const rec = await findCategoryRecord({ descripcion: bodyRaw });
         session.data.matriz = rec;
         session.data.categoria = rec?.categoria || session.data.categoria;
         session.step = "fob_unit";
@@ -633,7 +636,7 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
 
       // FOB unitario
       if (session.step === "fob_unit") {
-        const n = toNum(body);
+        const n = toNum(bodyRaw);
         if (n <= 0) {
           await sendText(from, "⚠️ Ingresá un número válido para FOB unitario (ej.: 125.50).");
         } else {
@@ -646,7 +649,7 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
 
       // Cantidad
       if (session.step === "cantidad") {
-        const q = Math.max(1, Math.round(toNum(body)));
+        const q = Math.max(1, Math.round(toNum(bodyRaw)));
         session.data.cantidad = q;
         session.data.fob_total = (session.data.fob_unit || 0) * q;
         session.step = "peso_vol";
@@ -656,32 +659,28 @@ Notas: ${m.notas || "Valores indicativos. Pueden variar según NCM, exenciones y
 
       // Peso y Volumen
       if (session.step === "peso_vol") {
-        const pesoMatch = body.match(/peso\s*:\s*([0-9\.,]+)/i);
-        const volMatch  = body.match(/vol(umen)?\s*:\s*([0-9\.,]+)/i);
-        const peso_kg = pesoMatch ? toNum(pesoMatch[1]) : toNum(body);
+        const pesoMatch = bodyRaw.match(/peso\s*:\s*([0-9\.,]+)/i);
+        const volMatch  = bodyRaw.match(/vol(umen)?\s*:\s*([0-9\.,]+)/i);
+        const peso_kg = pesoMatch ? toNum(pesoMatch[1]) : toNum(bodyRaw);
         const vol_cbm = volMatch  ? toNum(volMatch[2])  : 0;
         session.data.peso_kg = peso_kg;
         session.data.vol_cbm = vol_cbm;
 
-        // Seleccionar/ Sugerir modo
         const sugerido = sugerirModo({ peso_kg, vol_cbm });
         session.step = "modo_sugerencia";
         await sendModoSugerencia(from, sugerido);
         return res.sendStatus(200);
       }
 
-      // Confirmación directa por texto
       if (session.step === "confirm") {
         await sendConfirm(from, session.data);
         return res.sendStatus(200);
       }
 
-      // Cualquier otra cosa → repetir paso actual
       await sendText(from, "No te entendí. Escribí *inicio* para volver al comienzo.");
       return res.sendStatus(200);
     }
 
-    // Fallback
     await sendText(from, "ℹ️ Escribí *inicio* para comenzar.");
     return res.sendStatus(200);
   } catch (e) {
@@ -700,7 +699,10 @@ app.listen(PORT, () => {
   console.log("🔐 Token:", WHATSAPP_TOKEN ? WHATSAPP_TOKEN.slice(0, 10) + "..." : "(vacío)");
   console.log("📞 PHONE_NUMBER_ID:", PHONE_NUMBER_ID || "(vacío)");
   console.log("📄 Credenciales usadas:", { CLIENT_PATH, TOKEN_PATH });
+  console.log("🗂️ PRODUCT_MATRIX_TAB:", PRODUCT_MATRIX_TAB_RAW);
 });
+
+
 
 
 
