@@ -1,4 +1,4 @@
-// index.js - Calculadora de Costos Totales de Importación (con Despachante + TCA + LCL W/M + flujo centrado en producto)
+// index.js - Calculadora de Costos Totales de Importación (con Despachante + TCA + LCL W/M)
 import express from "express";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -18,7 +18,6 @@ const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
 
 const GOOGLE_SHEETS_ID = (process.env.GOOGLE_SHEETS_ID || "").trim();
-// Si te copiaron el link entero, limpiamos y nos quedamos con el nombre de pestaña
 const PRODUCT_MATRIX_TAB_RAW = (process.env.PRODUCT_MATRIX_TAB || "Hoja 1")
   .replace(/https?:\/\/.*/i, "")
   .trim();
@@ -30,22 +29,23 @@ const INSURANCE_RATE   = Number(process.env.INSURANCE_RATE   ?? 0.01); // 1% FOB
 const TASA_ESTATISTICA = Number(process.env.TASA_ESTATISTICA ?? 0.03); // 3% sobre CIF
 const RATE_IIGG        = Number(process.env.RATE_IIGG        ?? 0.06); // 6% sobre base IVA
 
-/* Fletes (tuneables por ENV; LCL con W/M + gastos locales AR según tu pedido) */
+/* Fletes */
 const RATE_AIR_PER_KG       = Number(process.env.RATE_AIR_PER_KG       ?? 5.5);
 const RATE_COURIER_PER_KG   = Number(process.env.RATE_COURIER_PER_KG   ?? 9.0);
-const RATE_LCL_PER_TON      = Number(process.env.RATE_LCL_PER_TON      ?? 5);     // USD por TON (1 m³ = 1 TON)
-const AR_LOCAL_CHARGES_LCL  = Number(process.env.AR_LOCAL_CHARGES_LCL  ?? 400);   // Gastos locales Argentina LCL
-const RATE_FCL_20           = Number(process.env.RATE_FCL_20           ?? 2100);  // USD por cntr
+const RATE_LCL_PER_TON      = Number(process.env.RATE_LCL_PER_TON      ?? 5);     // 1 m³ = 1 TON
+const AR_LOCAL_CHARGES_LCL  = Number(process.env.AR_LOCAL_CHARGES_LCL  ?? 400);   // gastos locales AR
+const RATE_FCL_20           = Number(process.env.RATE_FCL_20           ?? 2100);
 const RATE_FCL_40           = Number(process.env.RATE_FCL_40           ?? 3000);
 const RATE_FCL_40HC         = Number(process.env.RATE_FCL_40HC         ?? 3250);
 
 /* Despachante y gastos */
 const DESPACHANTE_PORCENTAJE = Number(process.env.DESPACHANTE_PORCENTAJE ?? 0.003); // 0.3% de CIF
-const DESPACHANTE_MINIMO     = Number(process.env.DESPACHANTE_MINIMO     ?? 150);   // USD
-const GASTOS_ADMINISTRATIVOS = Number(process.env.GASTOS_ADMINISTRATIVOS ?? 20);    // USD
-const GASTOS_OPERATIVOS      = Number(process.env.GASTOS_OPERATIVOS      ?? 100);   // USD
+const DESPACHANTE_MINIMO     = Number(process.env.DESPACHANTE_MINIMO     ?? 150);
+const DESPACHANTE_MAXIMO     = Number(process.env.DESPACHANTE_MAXIMO     ?? 5000);  // TOPE
+const GASTOS_ADMINISTRATIVOS = Number(process.env.GASTOS_ADMINISTRATIVOS ?? 20);
+const GASTOS_OPERATIVOS      = Number(process.env.GASTOS_OPERATIVOS      ?? 100);
 
-/* TCA (Depósito Fiscal) – tabla por rangos de PESO (kg) */
+/* TCA (por rangos de PESO) */
 const TCA_TABLE_DEFAULT = [
   { min: 0, max: 5, price: 52.31 },
   { min: 5, max: 10, price: 71.14 },
@@ -62,7 +62,7 @@ const TCA_TABLE_DEFAULT = [
   { min: 2000, max: 2500, price: 1155.66 },
   { min: 2500, max: 3000, price: 1359.42 },
   { min: 3000, max: 4000, price: 1577.46 },
-  { min: 4000, max: 5000, price: null }, // Consultar
+  { min: 4000, max: 5000, price: null }, // CONSULTAR
 ];
 let TCA_TABLE = TCA_TABLE_DEFAULT;
 try {
@@ -168,7 +168,13 @@ function sendProductoMetodo(to) {
   });
 }
 function sendCategoriaLista(to, categorias = []) {
-  const rows = categorias.slice(0, 10).map(c => ({ id: `cat_${c}`, title: c }));
+  const trunc = (s, n = 24) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+  const rows = categorias.slice(0, 10).map(c => ({
+    id: `cat_${c}`,
+    title: trunc(c),
+    description: c.length > 24 ? c : undefined,
+  }));
+  if (rows.length === 0) return sendText(to, "⚠️ No hay categorías disponibles. Revisá tu hoja de Google (pestaña y columnas).");
   return sendMessage({
     messaging_product: "whatsapp",
     to,
@@ -340,8 +346,10 @@ async function appendToSheetRange(a1, values) {
     console.error("❌ Error al escribir en Sheets:", err?.response?.data || err);
   }
 }
+
+/* ============ Matriz (Google Sheet) ============ */
 async function readMatrix() {
-  if (!hasGoogle()) return null;
+  if (!hasGoogle()) { console.warn("⚠️ Google deshabilitado (credenciales o SHEET ID faltan)"); return null; }
   try {
     const auth = getOAuthClient();
     const sheets = google.sheets({ version: "v4", auth });
@@ -351,52 +359,67 @@ async function readMatrix() {
     const tabForRange = needsQuotes ? `'${rawTab}'` : rawTab;
     const range = `${tabForRange}!A1:Z2000`;
 
-    const resp = await sheets.spreadsheets.values.get({
-      spreadsheetId: GOOGLE_SHEETS_ID,
-      range
-    });
+    const resp = await sheets.spreadsheets.values.get({ spreadsheetId: GOOGLE_SHEETS_ID, range });
     const rows = resp.data.values || [];
-    if (!rows.length) return null;
+    if (!rows.length) { console.warn("⚠️ Matriz vacía en Google Sheets"); return null; }
 
     const header = rows[0].map(h => (h || "").toString().trim());
-    const idx = (name) =>
-      header.findIndex(h => h.toLowerCase() === name.toLowerCase());
+    const findIdx = (...labels) => {
+      const targets = labels.map(x => x.toLowerCase());
+      return header.findIndex(h => {
+        const L = h.toLowerCase();
+        return targets.some(t => L === t || L.includes(t));
+      });
+    };
+
+    const idxs = {
+      NIVEL_1: findIdx("NIVEL_1","NIVEL1","NIVEL 1"),
+      NIVEL_2: findIdx("NIVEL_2","NIVEL2","NIVEL 2"),
+      NIVEL_3: findIdx("NIVEL_3","NIVEL3","NIVEL 3"),
+      CAT_PPAL: findIdx("CATEGORIA_PRINCIPAL","CATEGORÍA PRINCIPAL","CATEGORIA","CATEGORÍA","CATEGORIA_PRINCI"),
+      SUBCAT:   findIdx("SUBCATEGORIA","SUBCATEGORÍA","SUBCATEGORI"),
+      IVA:      findIdx("% IVA","IVA %","IVA(%)","IVA"),
+      IVA_AD:   findIdx("% IVA ADICIONAL","IVA ADICIONAL %","IVA ADICIONAL","IVA ADIC"),
+      DI:       findIdx("% DERECHOS IMPO","% DERECHOS","DERECHOS IMPO","DERECHOS IMP","DERECHOS"),
+      IIBB:     findIdx("% IIBB","IIBB %","ALIC IIBB","% IIBB Bs.As.","%IIBB","IIBB"),
+      INT:      findIdx("% IMPUESTOS INTERNOS","% INTERNOS","IMPUESTOS INTERNOS %","INTERNOS"),
+      REQ:      findIdx("REQUERIMIENTOS_IMPORTACION","REQUERIMIENTOS IMPORTACION","REQUERIMIENTOS"),
+      NOTAS:    findIdx("NOTAS","OBS","OBSERVACIONES"),
+    };
 
     const map = [];
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i] || [];
       const rec = {
-        NIVEL_1: r[idx("NIVEL_1")] || "",
-        NIVEL_2: r[idx("NIVEL_2")] || "",
-        NIVEL_3: r[idx("NIVEL_3")] || "",
-        CATEGORIA_PRINCIPAL: r[idx("CATEGORIA_PRINCIPAL")] || "",
-        SUBCATEGORIA: r[idx("SUBCATEGORIA")] || "",
-        iva: toNum(r[idx("% IVA")] || 0) / 100,
-        iva_adic: toNum(r[idx("% IVA ADICIONAL")] || 0) / 100,
-        di: toNum(r[idx("% DERECHOS IMPO")] || 0) / 100,
-        iibb: toNum(r[idx("% IIBB")] || 0) / 100,
-        internos: toNum(r[idx("% IMPUESTOS INTERNOS")] || 0) / 100,
-        req: r[idx("REQUERIMIENTOS_IMPORTACION")] || "",
-        notas: r[idx("NOTAS")] || "",
+        NIVEL_1: r[idxs.NIVEL_1] || "",
+        NIVEL_2: r[idxs.NIVEL_2] || "",
+        NIVEL_3: r[idxs.NIVEL_3] || "",
+        CATEGORIA_PRINCIPAL: r[idxs.CAT_PPAL] || "",
+        SUBCATEGORIA: r[idxs.SUBCAT] || "",
+        iva:      toNum(r[idxs.IVA]   || 0) / 100,
+        iva_adic: toNum(r[idxs.IVA_AD]|| 0) / 100,
+        di:       toNum(r[idxs.DI]    || 0) / 100,
+        iibb:     toNum(r[idxs.IIBB]  || 0) / 100,
+        internos: toNum(r[idxs.INT]   || 0) / 100,
+        req:      r[idxs.REQ]   || "",
+        notas:    r[idxs.NOTAS] || "",
       };
       rec.categoria = rec.CATEGORIA_PRINCIPAL || rec.SUBCATEGORIA || rec.NIVEL_2 || rec.NIVEL_1;
       map.push(rec);
     }
+    console.log(`✅ Matriz cargada desde Google Sheets (${map.length} filas)`);
     return map;
   } catch (e) {
-    console.warn("⚠️ No pude leer matriz de Google:", e.message);
+    console.warn("⚠️ No pude leer matriz de Google:", e?.response?.data || e.message);
     return null;
   }
 }
 
-/* Mapa fallback + reglas rápidas (ej.: “cable usb”) */
 const MATRIX_FALLBACK = [
   { categoria: "Electrónica y Electricidad", iva: 0.21, iva_adic: 0.20, di: 0.14, iibb: 0.035, internos: 0.00, notas: "" },
   { categoria: "Electrodomésticos",          iva: 0.21, iva_adic: 0.00, di: 0.20, iibb: 0.035, internos: 0.00, notas: "" },
   { categoria: "Automatización industrial",   iva: 0.21, iva_adic: 0.00, di: 0.14, iibb: 0.035, internos: 0.00, notas: "" },
-  { categoria: "Maquinaria y piezas",         iva: 0.21, iva_adic: 0.00, di: 0.14, iibb: 0.035, internos: 0.00, notas: "" },
   { categoria: "Informática",                 iva: 0.21, iva_adic: 0.00, di: 0.16, iibb: 0.035, internos: 0.00, notas: "" },
-  { categoria: "Textil/Indumentaria",         iva: 0.21, iva_adic: 0.00, di: 0.20, iibb: 0.035, internos: 0.00, notas: "" },
 ];
 const KEYWORD_RULES = [
   {
@@ -405,7 +428,6 @@ const KEYWORD_RULES = [
            iva: 0.21, iva_adic: 0.20, di: 0.14, iibb: 0.035, internos: 0.00, notas: "SEGURIDAD ELÉCTRICA" }
   },
 ];
-
 let MATRIX_CACHE = null;
 async function getMatrix() {
   if (MATRIX_CACHE) return MATRIX_CACHE;
@@ -446,7 +468,7 @@ async function findCategoryRecord({ categoria, descripcion }) {
   return M[0];
 }
 
-/* Registro de cálculos */
+/* ====== Registro de cálculos ====== */
 async function recordCalculo({
   wa_id, empresa, producto, categoria,
   fob_unit, cantidad, fob_total,
@@ -470,26 +492,19 @@ async function recordCalculo({
   ]);
 }
 
-/* ====== Lógica de transporte y costos ====== */
+/* ====== Transporte y costos ====== */
 function sugerirModo({ peso_kg = 0, vol_cbm = 0, fob_total = 0 }) {
-  // heurística inspirada en tu lógica Python + ajustes prácticos
-  const volKg = vol_cbm * 167;           // conversión volumétrica aérea
+  const volKg = vol_cbm * 167;                 // aéreo volumétrico
   const charge_kg = Math.max(peso_kg, volKg);
   const valorPorKg = peso_kg > 0 ? (fob_total / peso_kg) : 0;
 
-  // cargas muy chicas: courier
   if (charge_kg <= 30 && fob_total >= 200) return "courier";
-  // alto valor por kg y peso moderado: aéreo
   if (charge_kg <= 200 && valorPorKg > 20) return "aereo";
-  // volumen/peso ya sugieren marítimo
   if (vol_cbm >= 1.5 || charge_kg > 300) return "maritimo";
   return "aereo";
 }
-
 function estimarFlete({ modo, maritimo_tipo, vol_cbm = 0, peso_kg = 0, contenedor = "" }) {
-  // retornamos detalle para mostrar "gastos locales LCL" aparte
   const det = { total: 0, breakdown: {} };
-
   if (modo === "aereo") {
     const charge = Math.max(peso_kg, vol_cbm * 167);
     det.breakdown.air_kg = charge * RATE_AIR_PER_KG;
@@ -509,8 +524,7 @@ function estimarFlete({ modo, maritimo_tipo, vol_cbm = 0, peso_kg = 0, contenedo
       det.total = det.breakdown.fcl_base;
       return det;
     }
-    // LCL: W/M (1 m³ = 1 TON) + gastos locales AR
-    const charge_ton = Math.max(peso_kg / 1000, vol_cbm);
+    const charge_ton = Math.max(peso_kg / 1000, vol_cbm);   // W/M
     det.breakdown.lcl_wm = charge_ton * RATE_LCL_PER_TON;
     det.breakdown.lcl_ar_local = AR_LOCAL_CHARGES_LCL;
     det.total = det.breakdown.lcl_wm + det.breakdown.lcl_ar_local;
@@ -518,7 +532,6 @@ function estimarFlete({ modo, maritimo_tipo, vol_cbm = 0, peso_kg = 0, contenedo
   }
   return det;
 }
-
 function calcularTCA(peso_total_kg) {
   for (const band of TCA_TABLE) {
     if (peso_total_kg > band.min && peso_total_kg <= band.max) {
@@ -527,13 +540,13 @@ function calcularTCA(peso_total_kg) {
   }
   return { monto: 0, banda: ">5000kg (CONSULTAR)" };
 }
-
 function calcularDespacho(cif) {
-  const honor = Math.max(cif * DESPACHANTE_PORCENTAJE, DESPACHANTE_MINIMO);
-  const total = honor + GASTOS_ADMINISTRATIVOS + GASTOS_OPERATIVOS;
+  const base   = cif * DESPACHANTE_PORCENTAJE;
+  const honor0 = Math.max(base, DESPACHANTE_MINIMO);
+  const honor  = Math.min(honor0, DESPACHANTE_MAXIMO);
+  const total  = honor + GASTOS_ADMINISTRATIVOS + GASTOS_OPERATIVOS;
   return { honor, admin: GASTOS_ADMINISTRATIVOS, oper: GASTOS_OPERATIVOS, total };
 }
-
 function calcularCostos({ fob_total = 0, modo, maritimo_tipo, contenedor, peso_kg = 0, vol_cbm = 0, matriz }) {
   // Flete + Seguro
   const fletDet = estimarFlete({ modo, maritimo_tipo, vol_cbm, peso_kg, contenedor });
@@ -543,7 +556,7 @@ function calcularCostos({ fob_total = 0, modo, maritimo_tipo, contenedor, peso_k
   // CIF (antes de tasa estadística)
   const cif = fob_total + freight + insurance;
 
-  // Impuestos (tasa estadística se muestra junto a impuestos y entra a base IVA)
+  // Impuestos
   const di       = cif * (matriz?.di ?? 0);
   const tasa_est = cif * TASA_ESTATISTICA;
   const baseIVA  = cif + di + tasa_est;
@@ -555,14 +568,13 @@ function calcularCostos({ fob_total = 0, modo, maritimo_tipo, contenedor, peso_k
   const internos = (matriz?.internos ?? 0) > 0 ? cif * (matriz?.internos ?? 0) : 0;
 
   const total_impuestos = di + tasa_est + iva + iva_adic + iibb + iigg + internos;
-  const costo_aduanero  = cif + total_impuestos; // CIF + impuestos
+  const costo_aduanero  = cif + total_impuestos;
 
-  // Despachante
+  // Despacho y TCA
   const despacho = calcularDespacho(cif);
-  // TCA
   const tca = calcularTCA(peso_kg);
 
-  // Costo final (puesto con despacho + TCA)
+  // Costo final
   const costo_final = costo_aduanero + despacho.total + (tca.monto || 0);
 
   return {
@@ -715,7 +727,7 @@ app.post("/webhook", async (req, res) => {
           const r = out;
           const m = session.data.matriz || {};
 
-          // Detalle de flete (muestra LCL W/M + Locales por separado)
+          // Detalle de flete
           let fleteLinea = `Flete (${session.data.modo}`;
           if (session.data.modo === 'maritimo' && session.data.maritimo_tipo) fleteLinea += ` ${session.data.maritimo_tipo}`;
           if (session.data.contenedor) fleteLinea += ` ${session.data.contenedor}`;
@@ -745,7 +757,7 @@ IIGG (${(RATE_IIGG*100).toFixed(1)}%): USD ${fmt(r.iigg)}${(m.internos||0)>0 ? `
 *Costo aduanero (CIF + imp.):* *USD ${fmt(r.costo_aduanero)}*
 
 👨‍💼 *Despacho aduanero*
-Honorarios (${(DESPACHANTE_PORCENTAJE*100).toFixed(2)}% min USD ${DESPACHANTE_MINIMO}): USD ${fmt(r.despacho.honor)}
+Honorarios (${(DESPACHANTE_PORCENTAJE*100).toFixed(2)}% min USD ${DESPACHANTE_MINIMO} tope USD ${DESPACHANTE_MAXIMO}): USD ${fmt(r.despacho.honor)}
 Gastos admin: USD ${fmt(r.despacho.admin)}  •  Operativos: USD ${fmt(r.despacho.oper)}
 Total Despacho: *USD ${fmt(r.despacho.total)}*
 
@@ -759,7 +771,6 @@ Monto: ${r.tca.monto ? `USD ${fmt(r.tca.monto)}` : "Consultar"}
 
           await sendText(from, resumen);
 
-          // Guardar en Sheets (si está configurado)
           try {
             await recordCalculo({
               wa_id: from,
@@ -896,9 +907,20 @@ Monto: ${r.tca.monto ? `USD ${fmt(r.tca.monto)}` : "Consultar"}
   }
 });
 
-/* ============ Salud y raíz ============ */
+/* ============ Salud y diagnóstico ============ */
 app.get("/", (_req, res) => res.status(200).send("Conektar - Calculadora de Importación ✅"));
 app.get("/health", (_req, res) => res.status(200).send("ok"));
+app.get("/diag", async (_req, res) => {
+  const M = await getMatrix();
+  res.json({
+    google_enabled: hasGoogle(),
+    sheet_id: GOOGLE_SHEETS_ID,
+    tab: PRODUCT_MATRIX_TAB_RAW,
+    source: (M && M !== MATRIX_FALLBACK) ? "google_sheets" : "fallback",
+    rows: M ? M.length : 0,
+    sample: M ? M.slice(0,3) : [],
+  });
+});
 
 /* ============ Start ============ */
 app.listen(PORT, () => {
@@ -908,6 +930,8 @@ app.listen(PORT, () => {
   console.log("📄 Credenciales usadas:", { CLIENT_PATH, TOKEN_PATH });
   console.log("🗂️ PRODUCT_MATRIX_TAB:", PRODUCT_MATRIX_TAB_RAW);
 });
+
+
 
 
 
