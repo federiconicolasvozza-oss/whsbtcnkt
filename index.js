@@ -1,8 +1,7 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.6
-// Orden: logo → bienvenida + pedir empresa → (usuario responde) → botones de acción
-// Acciones: 1) Cotizar flete internacional (flujo Marítimo/Aéreo/Terrestre ya existente)
-//           2) Calcular costo de importación (placeholder, por ahora)
-// Mantiene lectura de planilla, logging a "Solicitudes", EXW, upsell, etc.
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.7
+// Orden: [IMG+CAPTION bienvenida] → [pregunta empresa] → (usuario responde) → [botones de acción]
+// Acciones: 1) Cotizar flete internacional (flujo Marítimo/Aéreo/Terrestre)
+//           2) Calcular costo de importación (placeholder de momento)
 
 import express from "express";
 import dotenv from "dotenv";
@@ -122,7 +121,7 @@ const sendImage = (to, link, caption="") =>
 const sendMainActions = (to) =>
   sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"💼 Cotizar flete internacional" },
-    { id:"action_calcular", title:"🧮 Calcular costo de importación" }, // por ahora placeholder
+    { id:"action_calcular", title:"🧮 Calcular costo de importación" }, // placeholder
   ]);
 
 // Menú de modos (cuando elige Cotizar flete internacional)
@@ -396,17 +395,21 @@ app.post("/webhook", async (req,res)=>{
     const lower = norm(text);
     const btnId = (type==="interactive") ? (msg.interactive?.button_reply?.id || "") : "";
 
-    // Bienvenida: logo → pedir empresa (NO muestra modos aquí)
+    /* -------- BIENVENIDA (logo + caption; luego pregunta empresa) -------- */
     const showWelcomeOnce = async () => {
       if (s.welcomed) return;
       s.welcomed = true;
-      await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-      await sendText(
+
+      // 1) Un solo mensaje: IMAGEN + CAPTION (presentación)
+      await sendImage(
         from,
+        LOGO_URL,
         "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
-        "Acá vas a poder *cotizar fletes internacionales* y *calcular el costo estimativo* de tus productos.\n\n" +
-        "Para empezar, decime el *nombre de tu empresa*."
+          "Acá vas a poder *cotizar fletes internacionales* y *estimar el costo de tu importación*."
       );
+
+      // 2) Mensaje aparte: primera pregunta
+      await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
       s.step = "ask_empresa";
       s.askedEmpresa = true;
     };
@@ -426,7 +429,6 @@ app.post("/webhook", async (req,res)=>{
 
       // Acciones principales
       if (btnId==="action_cotizar"){
-        // Ir a elegir modo de transporte
         s.step = "choose_modo";
         await sendModos(from);
         return res.sendStatus(200);
@@ -437,7 +439,7 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Menú de modos (flujo ya existente)
+      // Menú de modos
       if (btnId.startsWith("menu_")){
         s.modo = btnId.replace("menu_","");
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
@@ -609,7 +611,7 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.6"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.7"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2.6 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.7 en http://localhost:${PORT}`));
