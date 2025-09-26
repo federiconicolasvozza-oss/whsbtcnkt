@@ -1,6 +1,5 @@
-// index.js — ESM ✅ (solo BOTONES, máx 3) — Flujo según “MODELO FLUJO FLETE BOT”
-// Menú: [Marítimo] [Aéreo] [Terrestre]; Aéreo: [Carga general] [Courier] [Volver]
-// Marítimo: [LCL] [FCL] [Volver]; FCL equipo: [1×20’] [1×40’] [1×40’ HC]
+// index.js — ESM ✅ Solo BOTONES — Lectura robusta de pestañas (con logs)
+// Evita "Unable to parse range: <tab>!A1:H10000" incluso si el tab tuvo typos/tildes/espacios
 
 import express from "express";
 import dotenv from "dotenv";
@@ -20,10 +19,12 @@ const WHATSAPP_TOKEN = String(process.env.WHATSAPP_TOKEN || "").trim();
 const PHONE_NUMBER_ID = String(process.env.PHONE_NUMBER_ID || "").trim();
 
 const TAR_SHEET_ID = String(process.env.GOOGLE_TARIFFS_SHEET_ID || "").trim();
-const TAB_AER = String(process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aereos").trim();
-const TAB_MAR = String(process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").trim();
-const TAB_TER = String(process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
-const TAB_COU = String(process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
+
+// Estos son *hints* (pueden estar mal); igual resolveremos el nombre real
+const TAB_AER_HINT = String(process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aereos").trim();
+const TAB_MAR_HINT = String(process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").trim();
+const TAB_TER_HINT = String(process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
+const TAB_COU_HINT = String(process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
 
 const LOG_SHEET_ID = String(process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB = String(process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
@@ -58,7 +59,8 @@ function sheetsClient() {
 
 /* ====== Utils ====== */
 const norm = s => (s || "").toString().toLowerCase()
-  .normalize("NFD").replace(/\p{Diacritic}/gu,"").replace(/\s+/g," ").trim();
+  .normalize("NFD").replace(/\p{Diacritic}/gu,"").replace(/[^\p{L}\p{N}\s]/gu,"")
+  .replace(/\s+/g," ").trim();
 
 const toNum = s => {
   if (typeof s === "number") return s;
@@ -96,16 +98,57 @@ const sendButtons = (to, text, buttons) =>
     interactive:{ type:"button", body:{ text }, action:{ buttons: buttons.map(b => ({type:"reply", reply:{id:b.id, title:b.title}})) } }
   });
 
-/* ====== Sesiones ====== */
-const sessions = new Map(); // wa_id -> {step, data:{}}
-const getS = id => (sessions.get(id) || (sessions.set(id,{step:"start", data:{}}), sessions.get(id)));
+/* ====== Resolución robusta de pestañas ====== */
+const tabCache = new Map(); // sheetId -> { normTitle: realTitle }
+async function resolveTabTitle(sheetId, hint, extras = []) {
+  const n = norm(hint);
+  if (!tabCache.has(sheetId)) {
+    const sheets = sheetsClient();
+    const meta = await sheets.spreadsheets.get({
+      spreadsheetId: sheetId,
+      fields: "sheets(properties(title))"
+    });
+    const map = {};
+    for (const s of meta.data.sheets || []) {
+      const t = s.properties?.title || "";
+      map[norm(t)] = t;
+    }
+    tabCache.set(sheetId, map);
+  }
+  const map = tabCache.get(sheetId);
 
-/* ====== Sheets ====== */
-async function readRange(sheetId, a1) {
+  const candidates = Object.entries(map);
+  // exact
+  if (map[n]) { console.log("✅ Tab match exacto:", map[n]); return map[n]; }
+  // variantes sugeridas
+  const tryList = [n, ...extras.map(norm)];
+  for (const tryN of tryList) {
+    const exact = candidates.find(([k])=>k===tryN);
+    if (exact) { console.log("✅ Tab match:", exact[1]); return exact[1]; }
+    const starts = candidates.find(([k])=>k.startsWith(tryN));
+    if (starts) { console.log("✅ Tab startsWith:", starts[1]); return starts[1]; }
+    const includes = candidates.find(([k])=>k.includes(tryN));
+    if (includes) { console.log("✅ Tab includes:", includes[1]); return includes[1]; }
+  }
+  // heurística Maritimos/Martimos
+  if (n.startsWith("marit")) {
+    const special = candidates.find(([k])=>k.startsWith("martim") || k.startsWith("marit"));
+    if (special) { console.log("✅ Tab heurístico:", special[1]); return special[1]; }
+  }
+  const available = candidates.map(([,v])=>v).join(", ");
+  throw new Error(`No pude encontrar la pestaña "${hint}". Disponibles: ${available}`);
+}
+
+async function readTabRange(sheetId, tabHint, a1Core, extras=[]) {
+  const title = await resolveTabTitle(sheetId, tabHint, extras);
+  const range = `'${title}'!${a1Core}`;  // SIEMPRE entre comillas
+  console.log("→ Leyendo rango:", range);
   const sheets = sheetsClient();
-  const r = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range: a1 });
+  const r = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range });
   return r.data.values || [];
 }
+
+/* ====== LOG en Sheets ====== */
 async function logSolicitud(values) {
   const sheets = sheetsClient();
   await sheets.spreadsheets.values.append({
@@ -130,46 +173,31 @@ const COUNTRY_TO_REGION = {
 
 /* ====== COTIZADORES ====== */
 async function cotizarAereo({ origen, kg, vol }) {
-  const rows = await readRange(TAR_SHEET_ID, `${TAB_AER}!A1:H10000`);
-  if (!rows.length) throw new Error("Aereos vacío");
-  const header = rows[0], data = rows.slice(1);
-
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos","aéreos","aereo"]);
+  const header = rows[0] || []; const data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
   const iPrecio = headerIndex(header,"precio medio","precio usd medio","precio");
   const iMinKg  = headerIndex(header,"minimo en kg","mínimo en kg");
-
-  const row = data.find(r => norm(r[iOrigen]) === norm(origen) && norm(r[iDest]).includes("eze"));
+  const row = data.find(r => norm(r[iOrigen]) === norm(origen) && norm(r[iDest]||"").includes("eze"));
   if (!row) return null;
-
   const pricePerKg = toNum(row[iPrecio]);
   const minKg = toNum(row[iMinKg]) || AEREO_MIN_KG;
   const fact = Math.max(chargeable(kg, vol), 1);
   const applyMin = fact < minKg;
   const facturable = applyMin ? minKg : fact;
-
-  return {
-    pricePerKg,
-    minKg,
-    facturableKg: facturable,
-    applyMin,
-    totalUSD: pricePerKg * facturable,
-    destino: "Buenos Aires (EZE)"
-  };
+  return { pricePerKg, minKg, facturableKg: facturable, applyMin, totalUSD: pricePerKg * facturable, destino: "Buenos Aires (EZE)" };
 }
 
 async function cotizarMaritimo({ origen, modalidad }) {
-  const rows = await readRange(TAR_SHEET_ID, `${TAB_MAR}!A1:H10000`);
-  if (!rows.length) throw new Error("Maritimos vacío");
-  const header = rows[0], data = rows.slice(1);
-
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  const header = rows[0] || []; const data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
   const iMod    = headerIndex(header,"modalidad");
   const iPrecio = headerIndex(header,"precio medio","precio usd medio","precio");
-
   const row = data.find(r =>
-    norm(r[iDest]).includes("buenos aires") &&
+    norm(r[iDest]||"").includes("buenos aires") &&
     norm(r[iOrigen]) === norm(origen) &&
     norm(r[iMod]) === norm(modalidad)
   );
@@ -178,54 +206,35 @@ async function cotizarMaritimo({ origen, modalidad }) {
 }
 
 async function cotizarTerrestre({ origen }) {
-  const rows = await readRange(TAR_SHEET_ID, `${TAB_TER}!A1:H10000`);
-  if (!rows.length) throw new Error("Terrestres vacío");
-  const header = rows[0], data = rows.slice(1);
-
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_TER_HINT, "A1:H10000", ["terrestres","terrestre"]);
+  const header = rows[0] || []; const data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
   const iPrecio = headerIndex(header,"precio medio","precio usd medio","precio");
-
-  const row = data.find(r => norm(r[iDest]).includes("buenos aires") && norm(r[iOrigen]) === norm(origen));
+  const row = data.find(r => norm(r[iDest]||"").includes("buenos aires") && norm(r[iOrigen]) === norm(origen));
   if (!row) return null;
   return { totalUSD: toNum(row[iPrecio]), destino: "Buenos Aires" };
 }
 
 async function cotizarCourier({ pais, kg }) {
-  const rows = await readRange(TAR_SHEET_ID, `${TAB_COU}!A1:Z10000`);
-  if (!rows.length) throw new Error("Courier vacío");
-  const header = rows[0], data = rows.slice(1);
-
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_COU_HINT, "A1:Z10000", ["courier"]);
+  const header = rows[0] || []; const data = rows.slice(1);
   const iPeso = headerIndex(header,"peso","peso (kg)");
   const iAS   = headerIndex(header,"america sur");
   const iUS   = headerIndex(header,"usa","usa & canada","usa & canadá");
   const iEU   = headerIndex(header,"europa");
   const iASIA = headerIndex(header,"asia");
-
   const region = COUNTRY_TO_REGION[norm(pais)] || "europa";
   const col = region === "america sur" ? iAS : region === "usa & canadá" ? iUS : region === "asia" ? iASIA : iEU;
-
   const wanted = Number(kg);
   let exact = data.find(r => toNum(r[iPeso]) === wanted);
-  let usado = wanted;
-  let ajustado = false;
-
+  let usado = wanted, ajustado = false;
   if (!exact) {
-    let best = null, bestDiff = Infinity;
-    for (const r of data) {
-      const p = toNum(r[iPeso]); const d = Math.abs(p - wanted);
-      if (d < bestDiff) { best = r; bestDiff = d; }
-    }
+    let best=null, bestDiff=Infinity;
+    for (const r of data) { const p=toNum(r[iPeso]); const d=Math.abs(p-wanted); if (d<bestDiff){best=r;bestDiff=d;} }
     exact = best; usado = toNum(best[iPeso]); ajustado = true;
   }
-
-  return {
-    region,
-    escalonKg: usado,
-    ajustado,
-    totalUSD: toNum(exact[col]),
-    destino: "Buenos Aires (EZE)"
-  };
+  return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Buenos Aires (EZE)" };
 }
 
 /* ====== UI (solo BOTONES) ====== */
@@ -250,6 +259,10 @@ app.get("/webhook", (req,res)=>{
   return res.sendStatus(403);
 });
 
+/* ====== SESIONES ====== */
+const sessions = new Map();
+const getS = id => (sessions.get(id) || (sessions.set(id,{step:"start", data:{}}), sessions.get(id)));
+
 /* ====== WEBHOOK EVENTS ====== */
 app.post("/webhook", async (req,res)=>{
   try {
@@ -264,36 +277,20 @@ app.post("/webhook", async (req,res)=>{
     const bodyTxt = type==="text" ? (msg.text?.body || "").trim() : "";
     const lower = norm(bodyTxt);
 
-    // Comandos globales
     if (type==="text" && ["hola","menu","inicio","volver","start"].includes(lower)) {
       sessions.delete(from); await sendHome(from); return res.sendStatus(200);
     }
 
-    // INTERACTIVE (BOTONES)
     if (type === "interactive") {
       const id = msg.interactive?.button_reply?.id;
 
-      // Menú principal
-      if (id === "menu_maritimo") {
-        s.data.tipo = "maritimo";
-        s.step = "empresa";
-        await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
-        return res.sendStatus(200);
-      }
-      if (id === "menu_aereo") {
-        s.data.tipo = "aereo";
-        s.step = "empresa";
-        await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
-        return res.sendStatus(200);
-      }
-      if (id === "menu_terrestre") {
-        s.data.tipo = "terrestre";
+      if (id === "menu_maritimo" || id === "menu_aereo" || id === "menu_terrestre") {
+        s.data.tipo = id.replace("menu_","");
         s.step = "empresa";
         await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
         return res.sendStatus(200);
       }
 
-      // Submenús
       if (id === "mar_LCL" || id === "mar_FCL" || id === "mar_volver") {
         if (id === "mar_volver") { await sendHome(from); sessions.delete(from); return res.sendStatus(200); }
         s.data.modalidad = id === "mar_LCL" ? "LCL" : "FCL";
@@ -333,7 +330,6 @@ app.post("/webhook", async (req,res)=>{
       return res.sendStatus(200);
     }
 
-    // TEXTO
     if (type === "text") {
       if (s.step === "start") { await sendHome(from); return res.sendStatus(200); }
 
@@ -377,44 +373,31 @@ app.post("/webhook", async (req,res)=>{
         }
 
         if (s.data.tipo === "maritimo") {
-          const r = await cotizarMaritimo({ origen: s.data.origen, modalidad: s.data.modalidad });
-          if (!r) { await sendText(from,"❌ No encontré esa ruta/modalidad en tu planilla. Probá con el nombre tal como figura en la pestaña *Maritimos*."); return res.sendStatus(200); }
-          const aclaracion = " + gastos locales en BUE";
-          const extra = s.data.modalidad === "LCL" ? "\nNota: *LCL según valor de planilla; no se prorratea por m³*" : "";
-          const resp =
+          try {
+            const r = await cotizarMaritimo({ origen: s.data.origen, modalidad: s.data.modalidad });
+            if (!r) { await sendText(from,"❌ No encontré esa ruta/modalidad en tu planilla. Usá el nombre tal como figura en *Marítimos*."); return res.sendStatus(200); }
+            const aclaracion = " + gastos locales en BUE";
+            const extra = s.data.modalidad === "LCL" ? "\nNota: *LCL según valor de planilla; no se prorratea por m³*" : "";
+            const resp =
 `🚢 *Marítimo ${s.data.modalidad}*
 Origen: *${s.data.origen}* → Destino: *${r.destino}*
 *Total estimado:* USD ${fmt(r.totalUSD)}${aclaracion}${extra}
 
 Validez: ${VALIDEZ_DIAS} días.
 ¿Cotizamos también *despacho aduanero*?`;
-          await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","maritimo", s.data.origen, r.destino, "", "", s.data.modalidad, r.totalUSD, `Resumen: Marítimo ${s.data.modalidad} ${s.data.origen}→${r.destino}`]);
-          sessions.delete(from);
+            await sendText(from, resp);
+            await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","maritimo", s.data.origen, r.destino, "", "", s.data.modalidad, r.totalUSD, `Resumen: Marítimo ${s.data.modalidad} ${s.data.origen}→${r.destino}`]);
+            sessions.delete(from);
+          } catch (e) {
+            console.error("cotizarMaritimo error", e);
+            await sendText(from,"⚠️ No pude leer la pestaña *Marítimos*. Revisá el nombre del tab o los permisos del archivo.");
+          }
           return res.sendStatus(200);
         }
-
-        if (s.data.tipo === "terrestre") {
-          const r = await cotizarTerrestre({ origen: s.data.origen });
-          if (!r) { await sendText(from,"❌ No encontré esa ruta en *Terrestres*. Probá exactamente como figura en la planilla."); return res.sendStatus(200); }
-          const resp =
-`🚛 *Terrestre*
-Origen: *${s.data.origen}* → Destino: *${r.destino}*
-*Total estimado:* USD ${fmt(r.totalUSD)} + gastos locales en BUE
-
-Validez: ${VALIDEZ_DIAS} días.`;
-          await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","terrestre", s.data.origen, r.destino, "", "", "", r.totalUSD, `Resumen: Terrestre ${s.data.origen}→${r.destino}`]);
-          sessions.delete(from);
-          return res.sendStatus(200);
-        }
-
-        return res.sendStatus(200);
       }
 
       if (s.step === "peso") {
-        const kg = Math.max(0, Math.round(toNum(bodyTxt)));
-        s.data.kg = kg;
+        s.data.kg = Math.max(0, Math.round(toNum(bodyTxt)));
         s.step = "peso_vol";
         await sendText(from,"📦 *Peso volumétrico (kg)* (opcional, poné 0 si no sabés).");
         return res.sendStatus(200);
@@ -422,13 +405,12 @@ Validez: ${VALIDEZ_DIAS} días.`;
 
       if (s.step === "peso_vol") {
         s.data.vol = Math.max(0, toNum(bodyTxt));
-
-        const r = await cotizarAereo({ origen: s.data.origen, kg: s.data.kg, vol: s.data.vol || 0 });
-        if (!r) { await sendText(from,"❌ No encontré esa ruta en *Aereos*. Usá el nombre tal cual está (ej.: “Shanghai (PVG)”)."); return res.sendStatus(200); }
-
-        const lineMin = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
-        const aclaracion = " + gastos locales en BUE";
-        const resp =
+        try {
+          const r = await cotizarAereo({ origen: s.data.origen, kg: s.data.kg, vol: s.data.vol || 0 });
+          if (!r) { await sendText(from,"❌ No encontré esa ruta en *Aéreos*. Usá el nombre tal cual está (ej.: “Shanghai (PVG)”)."); return res.sendStatus(200); }
+          const lineMin = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
+          const aclaracion = " + gastos locales en BUE";
+          const resp =
 `✈️ *Aéreo – Carga general*
 Origen: *${s.data.origen}* → Destino: *${r.destino}*
 Tarifa: USD ${fmt(r.pricePerKg)} / kg${lineMin}
@@ -437,9 +419,13 @@ Kilos facturables: *${r.facturableKg}*
 
 Validez: ${VALIDEZ_DIAS} días.
 ¿Querés que coticemos también el *despacho aduanero*?`;
-        await sendText(from, resp);
-        await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","aereo", s.data.origen, r.destino, s.data.kg, s.data.vol||"", "", r.totalUSD, `Resumen: Aéreo ${s.data.origen}→${r.destino}; unit:${fmt(r.pricePerKg)}; fact:${r.facturableKg}kg; min:${r.minKg}`]);
-        sessions.delete(from);
+          await sendText(from, resp);
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","aereo", s.data.origen, r.destino, s.data.kg, s.data.vol||"", "", r.totalUSD, `Resumen: Aéreo ${s.data.origen}→${r.destino}; unit:${fmt(r.pricePerKg)}; fact:${r.facturableKg}kg; min:${r.minKg}`]);
+          sessions.delete(from);
+        } catch (e) {
+          console.error("cotizarAereo error", e);
+          await sendText(from,"⚠️ No pude leer la pestaña *Aéreos*. Revisá el nombre del tab o los permisos del archivo.");
+        }
         return res.sendStatus(200);
       }
 
@@ -453,19 +439,24 @@ Validez: ${VALIDEZ_DIAS} días.
       if (s.step === "peso_courier") {
         const kg = toNum(bodyTxt);
         s.data.kg = kg;
-        const r = await cotizarCourier({ pais: s.data.pais, kg });
-        if (!r) { await sendText(from,"❌ No pude calcular courier. Revisá la pestaña *Courier*."); return res.sendStatus(200); }
-        const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg de la tabla.` : "";
-        const resp =
+        try {
+          const r = await cotizarCourier({ pais: s.data.pais, kg });
+          if (!r) { await sendText(from,"❌ No pude calcular courier. Revisá la pestaña *Courier*."); return res.sendStatus(200); }
+          const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg de la tabla.` : "";
+          const resp =
 `📦 *Courier*
 Origen: *${s.data.pais}* (${r.region}) → Destino: *${r.destino}*
 Peso: ${fmt(s.data.kg)} kg${nota}
 *Total estimado:* USD ${fmt(r.totalUSD)} + gastos locales en BUE
 
 Validez: ${VALIDEZ_DIAS} días.`;
-        await sendText(from, resp);
-        await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","courier", s.data.pais, r.destino, s.data.kg, "", "", r.totalUSD, `Resumen: Courier ${s.data.pais}(${r.region})→${r.destino}; escalon:${r.escalonKg}`]);
-        sessions.delete(from);
+          await sendText(from, resp);
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","courier", s.data.pais, r.destino, s.data.kg, "", "", r.totalUSD, `Resumen: Courier ${s.data.pais}(${r.region})→${r.destino}; escalon:${r.escalonKg}`]);
+          sessions.delete(from);
+        } catch (e) {
+          console.error("cotizarCourier error", e);
+          await sendText(from,"⚠️ No pude leer la pestaña *Courier*. Revisá el nombre del tab o los permisos del archivo.");
+        }
         return res.sendStatus(200);
       }
 
