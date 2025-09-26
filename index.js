@@ -1,21 +1,11 @@
-// index.js — Bot Cotizador de Fletes (Conektar S.A.)
-// Lee tarifas desde Google Sheets (Aereos / Maritimos / Terrestres / Courier)
-// Registra cada consulta en la hoja "Solicitudes"
-// WhatsApp Cloud API + Express
-//
-// Requisitos de entorno (ver .env):
-// - PORT, VERIFY_TOKEN, WHATSAPP_TOKEN, PHONE_NUMBER_ID, API_VERSION
-// - GOOGLE_TARIFFS_SHEET_ID (+ tabs Aereos/Maritimos/Terrestres/Courier)
-// - GOOGLE_LOG_SHEET_ID, GOOGLE_LOG_TAB=Solicitudes
-// - AEREO_MIN_KG=100, VALIDEZ_DIAS=7
-//
-// Credenciales Google: oauth_client.json y oauth_token.json en /etc/secrets o ./credentials
+// index.js — ESM ✅ (compatible con "type":"module")
+// Bot Cotizador de Fletes (Conektar S.A.)
 
-const express = require("express");
-const dotenv = require("dotenv");
-const fs = require("fs");
-const path = require("path");
-const { google } = require("googleapis");
+import express from "express";
+import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+import { google } from "googleapis";
 
 dotenv.config();
 const app = express();
@@ -44,8 +34,7 @@ const VALIDEZ_DIAS = Number(process.env.VALIDEZ_DIAS ?? 7);
 function credPath(file) {
   const p1 = path.join("/etc/secrets", file);
   try { fs.accessSync(p1); return p1; } catch {}
-  const p2 = path.join(process.cwd(), "credentials", file);
-  return p2;
+  return path.join(process.cwd(), "credentials", file);
 }
 const CLIENT_PATH = credPath("oauth_client.json");
 const TOKEN_PATH  = credPath("oauth_token.json");
@@ -76,7 +65,6 @@ const toNum = s => {
     .match(/-?\d+(\.\d+)?/);
   return m ? Number(m[0]) : 0;
 };
-
 const fmt = n => isFinite(n) ? Number(n).toFixed(2) : "0.00";
 const chargeable = (kg, vol) => Math.max(Math.ceil(kg||0), Math.ceil(vol||0));
 
@@ -111,7 +99,7 @@ const sendButtons = (to, text, buttons) =>
 const sessions = new Map(); // wa_id -> {step, data:{}}
 const getS = id => (sessions.get(id) || (sessions.set(id,{step:"start", data:{}}), sessions.get(id)));
 
-/* ====== Lectura y Log en Sheets ====== */
+/* ====== Sheets ====== */
 async function readRange(sheetId, a1) {
   const sheets = sheetsClient();
   const r = await sheets.spreadsheets.values.get({ spreadsheetId: sheetId, range: a1 });
@@ -140,8 +128,6 @@ const COUNTRY_TO_REGION = {
 };
 
 /* ====== COTIZADORES ====== */
-
-// AÉREO — Precio Medio USD/kg, mínimo 100 kg, facturable por mayor entre kg y volumétrico
 async function cotizarAereo({ origen, kg, vol }) {
   const rows = await readRange(TAR_SHEET_ID, `${TAB_AER}!A1:H10000`);
   if (!rows.length) throw new Error("Aereos vacío");
@@ -171,7 +157,6 @@ async function cotizarAereo({ origen, kg, vol }) {
   };
 }
 
-// MARÍTIMO — Usa Modalidad + Precio Medio (todo-in). LCL sin prorrateo por m³
 async function cotizarMaritimo({ origen, modalidad }) {
   const rows = await readRange(TAR_SHEET_ID, `${TAB_MAR}!A1:H10000`);
   if (!rows.length) throw new Error("Maritimos vacío");
@@ -191,7 +176,6 @@ async function cotizarMaritimo({ origen, modalidad }) {
   return { modalidad, totalUSD: toNum(row[iPrecio]), destino: "Puerto de Buenos Aires" };
 }
 
-// TERRESTRE — Precio Medio tal cual
 async function cotizarTerrestre({ origen }) {
   const rows = await readRange(TAR_SHEET_ID, `${TAB_TER}!A1:H10000`);
   if (!rows.length) throw new Error("Terrestres vacío");
@@ -206,7 +190,6 @@ async function cotizarTerrestre({ origen }) {
   return { totalUSD: toNum(row[iPrecio]), destino: "Buenos Aires" };
 }
 
-// COURIER — Usa peso informado; si no hay exacto, toma el más cercano y lo avisa
 async function cotizarCourier({ pais, kg }) {
   const rows = await readRange(TAR_SHEET_ID, `${TAB_COU}!A1:Z10000`);
   if (!rows.length) throw new Error("Courier vacío");
@@ -281,12 +264,10 @@ app.post("/webhook", async (req,res)=>{
     const bodyTxt = type==="text" ? (msg.text?.body || "").trim() : "";
     const lower = norm(bodyTxt);
 
-    // Comandos globales
     if (type==="text" && ["hola","menu","inicio","volver","start"].includes(lower)) {
       sessions.delete(from); await sendHome(from); return res.sendStatus(200);
     }
 
-    // INTERACTIVE
     if (type === "interactive") {
       const id = msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id;
 
@@ -298,7 +279,7 @@ app.post("/webhook", async (req,res)=>{
       }
 
       if (id?.startsWith("mar_")) {
-        s.data.modalidad = id.replace("mar_","").toUpperCase(); // FCL20/FCL40/FCL40HC/LCL
+        s.data.modalidad = id.replace("mar_","").toUpperCase();
         s.step = "origen";
         await sendText(from, "📍 *Origen* (puerto de salida, ej.: Shanghai / Ningbo / Shenzhen).");
         return res.sendStatus(200);
@@ -310,13 +291,11 @@ app.post("/webhook", async (req,res)=>{
       return res.sendStatus(200);
     }
 
-    // TEXTO
     if (type === "text") {
       if (s.step === "start") { await sendHome(from); return res.sendStatus(200); }
 
       if (s.step === "empresa") {
         s.data.empresa = bodyTxt;
-        // branch según tipo
         if (s.data.tipo === "maritimo") {
           s.step = "maritimo_modalidad";
           await sendButtons(from, "🚢 Marítimo seleccionado. Elegí modalidad:", [
@@ -445,7 +424,6 @@ Validez: ${VALIDEZ_DIAS} días.`;
         return res.sendStatus(200);
       }
 
-      // fallback
       await sendHome(from);
       return res.sendStatus(200);
     }
