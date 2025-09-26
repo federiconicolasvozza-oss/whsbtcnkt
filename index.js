@@ -501,7 +501,7 @@ app.post("/webhook", async (req,res)=>{
         } else if (s.step === "courier_origen") {
             s.data.origen_aeropuerto = bodyTxt; // país
             s.step = "courier_peso";
-            await sendText(from, "⚖️ Indicá el *peso en kg* (podés usar decimales: 1.5, 2, 2.5...)._));
+            await sendText(from, "⚖️ Indicá el *peso en kg* (podés usar decimales: 1.5, 2, 2.5...).");
         } else if (s.step === "courier_peso") {
             const peso = toNum(bodyTxt);
             if (isNaN(peso)) { await sendText(from, "Por favor, ingresá un peso válido (solo números)."); return res.sendStatus(200); }
@@ -599,4 +599,5 @@ app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Flete
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 app.listen(PORT, ()=> console.log(`🚀 Bot v2 en http://localhost:${PORT}`));
+
 
