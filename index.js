@@ -1,10 +1,8 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2-fix
-// Fixes:
-// - Reemplazar sendImage(to, …) -> sendImage(from, …)
-// - Remover uso de s.step dentro de askResumen (scope inválido)
-// - Typos en textos (comillas de más)
-// - Flujo EXW: si “Sí”, pedir dirección y confirmar
-// - Pequeñas robusteces y comentarios
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.2
+// - Bienvenida con bandera `welcomed` (evita loop)
+// - Menú principal + pedido de empresa en paralelo, sin resets
+// - Cotizadores: Aéreo (carga/courier), Marítimo (LCL/FCL), Terrestre (FTL)
+// - EXW y upsell despacho
 
 import express from "express";
 import dotenv from "dotenv";
@@ -81,7 +79,7 @@ function headerIndex(header, ...names) {
   return H.findIndex(h => targets.some(t => h === t || h.includes(t)));
 }
 
-/* ====== WhatsApp helpers ====== */
+/* ====== WhatsApp API ====== */
 async function waSend(payload) {
   const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
   const res = await fetch(url, {
@@ -104,7 +102,7 @@ const sendButtons = (to, text, buttons) =>
 const sendImage = (to, link, caption="") =>
   waSend({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
-/* ====== Resolución de pestañas ====== */
+/* ====== Lectura de pestañas con tolerancia ====== */
 const tabCache = new Map();
 async function resolveTabTitle(sheetId, hint, extras = []) {
   const n = norm(hint);
@@ -136,17 +134,21 @@ async function readTabRange(sheetId, tabHint, a1Core, extras=[]) {
   return r.data.values || [];
 }
 
-/* ====== LOG ====== */
+/* ====== LOG en Sheets ====== */
 async function logSolicitud(values) {
-  await sheetsClient().spreadsheets.values.append({
-    spreadsheetId: LOG_SHEET_ID,
-    range: `${LOG_TAB}!A1`,
-    valueInputOption: "USER_ENTERED",
-    requestBody: { values: [values] }
-  });
+  try {
+    await sheetsClient().spreadsheets.values.append({
+      spreadsheetId: LOG_SHEET_ID,
+      range: `${LOG_TAB}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [values] }
+    });
+  } catch (e) {
+    console.error("logSolicitud error", e?.message || e);
+  }
 }
 
-/* ====== Datos ====== */
+/* ====== Datos auxiliares ====== */
 const COUNTRY_TO_REGION = {
   "argentina":"america sur","brasil":"america sur","chile":"america sur","uruguay":"america sur","paraguay":"america sur","bolivia":"america sur","peru":"america sur","colombia":"america sur","ecuador":"america sur","venezuela":"america sur",
   "estados unidos":"usa & canadá","usa":"usa & canadá","eeuu":"usa & canadá","united states":"usa & canadá","canada":"usa & canadá","canadá":"usa & canadá",
@@ -201,7 +203,7 @@ async function cotizarAereo({ origen, kg, vol }) {
   const applyMin = fact < minKg;
   const facturable = applyMin ? minKg : fact;
 
-  return { pricePerKg, minKg, facturableKg: facturable, applyMin, totalUSD: pricePerKg * facturable, destino: "Buenos Aires (EZE)" };
+  return { pricePerKg, minKg, facturableKg: facturable, applyMin, totalUSD: pricePerKg * facturable, destino: "Ezeiza (EZE)" };
 }
 
 async function cotizarMaritimo({ origen, modalidad }) {
@@ -258,48 +260,24 @@ async function cotizarCourier({ pais, kg }) {
     for (const r of data) { const p=toNum(r[iPeso]); const d=Math.abs(p-wanted); if (d<bestDiff){best=r;bestDiff=d;} }
     exact = best; usado = toNum(best[iPeso]); ajustado = true;
   }
-  return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Buenos Aires (EZE)" };
+  return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Ezeiza (EZE)" };
 }
 
-/* ====== UI ====== */
-async function sendMainMenu(to, name) {
-  const welcome = name ? `¡Hola, ${name}! ` : "";
-  return sendButtons(
-    to,
-    `${welcome}Elegí el modo de transporte:`,
-    [
-      { id:"menu_maritimo",  title:"🚢 Marítimo" },
-      { id:"menu_aereo",     title:"✈️ Aéreo" },
-      { id:"menu_terrestre", title:"🚛 Terrestre" }
-    ]
-  );
-}
-
-/* ====== Verify ====== */
-app.get("/webhook", (req,res)=>{
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-  if (mode === "subscribe" && token === VERIFY_TOKEN) return res.status(200).send(challenge);
-  return res.sendStatus(403);
-});
-
-/* ====== STATE ====== */
+/* ====== Estado de sesión ====== */
 const sessions = new Map();
 const emptyState = () => ({
   empresa:null, modo:null,
   maritimo_tipo:null, contenedor:null, origen_puerto:null, destino_puerto:"Buenos Aires (AR)",
   aereo_tipo:null, origen_aeropuerto:null, destino_aeropuerto:"Ezeiza (EZE)",
   courier_persona:null,
-  terrestre_tipo:null, origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
+  terrestre_tipo:"FTL", origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
   peso_kg:null, vol_cbm:null, tarifa:null, moneda:"USD", validez_dias:VALIDEZ_DIAS,
-  // post-tarifa
-  exw_dir:null,
-  valor_mercaderia:null, tipo_mercaderia:null
+  exw_dir:null, valor_mercaderia:null, tipo_mercaderia:null,
+  welcomed:false
 });
 function getS(id){ if(!sessions.has(id)) sessions.set(id,{step:"start", data:emptyState()}); return sessions.get(id); }
 
-/* ====== Helpers de flujo ====== */
+/* ====== UI ====== */
 function modoMayus(m) {
   const map = { aereo:"AÉREO", maritimo:"MARÍTIMO", terrestre:"TERRESTRE" };
   return map[m] || (m||"").toUpperCase();
@@ -320,14 +298,14 @@ function resumenTexto(d){
       if (d.peso_kg!=null) lines.push(`• Peso: *${d.peso_kg} kg*`);
       if (d.vol_cbm!=null) lines.push(`• Peso volumétrico: *${d.vol_cbm} kg*`);
     } else {
-      lines.push(`• Subtipo: *Courier* (${d.courier_persona||"—"})`);
-      lines.push(`• Origen: *${d.origen_aeropuerto || "?"}* ➡️ Destino: *${d.destino_aeropuerto}*`);
+      lines.push(`• Subtipo: *Courier*`);
+      lines.push(`• Origen: *${d.origen_aeropuerto || "?"}* ➡️ *${d.destino_aeropuerto}*`);
       if (d.peso_kg!=null) lines.push(`• Peso: *${fmt(d.peso_kg)} kg*`);
     }
   }
   if (d.modo==="terrestre"){
-    lines.push(`• Tipo: *${d.terrestre_tipo || "-"}*`);
-    lines.push(`• Origen: *${d.origen_direccion || "?"}* ➡️ Destino: *${d.destino_direccion}*`);
+    lines.push(`• Tipo: *FTL*`);
+    lines.push(`• Origen: *${d.origen_direccion || "?"}* ➡️ *${d.destino_direccion}*`);
   }
   lines.push("\n¿Confirmás para cotizar?");
   return lines.join("\n");
@@ -340,11 +318,20 @@ async function askResumen(to, d){
   ]);
 }
 async function upsellDespacho(to){
-  return sendButtons(to, "Además del flete, ¿te interesaría cotizar el *despacho aduanero*?", [
-    { id:"desp_si", title:"Sí, cotizar" },
-    { id:"desp_no", title:"No, gracias" }
+  return sendButtons(to, "¿Sabías que también somos *despachantes de aduana*? ¿Te interesaría cotizarlo?", [
+    { id:"desp_si", title:"Sí" },
+    { id:"desp_no", title:"No" }
   ]);
 }
+
+/* ====== VERIFY ====== */
+app.get("/webhook", (req,res)=>{
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === VERIFY_TOKEN) return res.status(200).send(challenge);
+  return res.sendStatus(403);
+});
 
 /* ====== WEBHOOK ====== */
 app.post("/webhook", async (req,res)=>{
@@ -353,223 +340,229 @@ app.post("/webhook", async (req,res)=>{
     const msg = change?.messages?.[0];
     if (!msg) return res.sendStatus(200);
 
-    const from = msg.from;
-    const s = getS(from);
-    const type = msg.type;
-    const bodyTxt = (type === "text") ? (msg.text?.body || "").trim() : "";
-    const buttonId = (type === "interactive") ? (msg.interactive?.button_reply?.id || "") : "";
-    const lowerBody = norm(bodyTxt);
+    const from  = msg.from;
+    const s     = getS(from);
+    const type  = msg.type;
+    const text  = (type==="text") ? (msg.text?.body || "").trim() : "";
+    const lower = norm(text);
+    const btnId = (type==="interactive") ? (msg.interactive?.button_reply?.id || "") : "";
 
-    // Reinicio
-    if (type === "text" && ["hola","menu","inicio","volver","start","cancelar"].includes(lowerBody)) {
-      sessions.set(from, {step:"start", data:emptyState()});
+    // helper: bienvenida una sola vez
+    const showWelcomeOnce = async () => {
+      if (s.data.welcomed) return;
+      s.data.welcomed = true;
       await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-      await sendText(from, "¡Bienvenido/a al *Bot de Cotizaciones de Conektar S.A.*! 👋\n\nPara empezar, decime el nombre de tu empresa.");
-      s.step = "ask_empresa";
+      await sendButtons(
+        from,
+        "¡Bienvenido/a al *Bot de Cotizaciones de Conektar S.A.*! 👋\nElegí el modo:",
+        [
+          { id:"menu_maritimo",  title:"🚢 Marítimo" },
+          { id:"menu_aereo",     title:"✈️ Aéreo" },
+          { id:"menu_terrestre", title:"🚛 Terrestre" }
+        ]
+      );
+      await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
+      s.step = s.step || "ask_empresa";
+    };
+
+    // arranque/volver sin resetear
+    if (type==="text" && ["hola","menu","inicio","start","volver"].includes(lower)) {
+      await showWelcomeOnce();
+      return res.sendStatus(200);
+    }
+    if (!s.data.welcomed) {
+      await showWelcomeOnce();
+      // si el primer mensaje ya es empresa, guardarla
+      if (type==="text" && text && !["hola","menu","inicio","start","volver"].includes(lower)) {
+        s.data.empresa = text;
+        await sendText(from, `Gracias. Empresa guardada: *${s.data.empresa}*`);
+      }
       return res.sendStatus(200);
     }
 
-    /* ====== BOTONES ====== */
-    if (type === "interactive") {
+    /* ===== BOTONES ===== */
+    if (type==="interactive") {
       // Menú principal
-      if (buttonId.startsWith("menu_")) {
-        s.data = emptyState();
-        s.data.modo = buttonId.replace("menu_","");
+      if (btnId.startsWith("menu_")) {
+        s.data.modo = btnId.replace("menu_","");
+        if (!s.data.empresa) { s.step="ask_empresa"; await sendText(from,"Antes de seguir, decime el *nombre de tu empresa*."); return res.sendStatus(200); }
 
-        if (s.data.modo === "maritimo") {
-          s.step = "mar_tipo";
-          await sendButtons(from, "🚢 *Marítimo:* ¿Qué tipo de carga es?", [
-            { id: "mar_LCL", title: "LCL (Carga suelta)" },
-            { id: "mar_FCL", title: "FCL (Contenedor)" },
+        if (s.data.modo==="maritimo"){
+          s.step="mar_tipo";
+          await sendButtons(from,"🚢 *Marítimo:* Elegí modalidad",[
+            { id:"mar_LCL", title:"LCL" },
+            { id:"mar_FCL", title:"FCL" }
           ]);
-        } else if (s.data.modo === "aereo") {
-          s.step = "aereo_subtipo";
-          await sendButtons(from, "✈️ *Aéreo:* ¿Qué necesitás cotizar?", [
-            { id: "aer_carga", title: "Carga general" },
-            { id: "aer_courier", title: "Courier" },
+        } else if (s.data.modo==="aereo"){
+          s.step="aereo_subtipo";
+          await sendButtons(from,"✈️ *Aéreo:* ¿Qué necesitás cotizar?",[
+            { id:"aer_carga",   title:"Carga general" },
+            { id:"aer_courier", title:"Courier" }
           ]);
-        } else if (s.data.modo === "terrestre") {
-          s.data.terrestre_tipo = "FTL";
-          s.step = "ter_origen";
-          await sendText(from, "🚛 *Terrestre FTL:* Indicá la ciudad o dirección de origen.");
+        } else if (s.data.modo==="terrestre"){
+          s.data.terrestre_tipo="FTL";
+          s.step="ter_origen";
+          await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN.");
         }
         return res.sendStatus(200);
       }
 
-      // Sub-menús Marítimo
-      if (buttonId === "mar_LCL" || buttonId === "mar_FCL") {
-        s.data.maritimo_tipo = buttonId.replace("mar_", "");
-        if (s.data.maritimo_tipo === "FCL") {
-          s.step = "mar_contenedor";
-          await sendButtons(from, "🚢 ¿Qué tipo de contenedor?", [
-            { id: "cont_20", title: "20 pies" },
-            { id: "cont_40", title: "40 pies" },
+      // Marítimo
+      if (btnId==="mar_LCL" || btnId==="mar_FCL"){
+        s.data.maritimo_tipo = btnId==="mar_LCL" ? "LCL" : "FCL";
+        if (s.data.maritimo_tipo==="FCL"){
+          s.step="mar_equipo";
+          await sendButtons(from,"⚓ Elegí equipo",[
+            { id:"mar_FCL20",  title:"1×20’" },
+            { id:"mar_FCL40",  title:"1×40’" },
+            { id:"mar_FCL40HC",title:"1×40’ HC" }
           ]);
         } else {
-          s.step = "mar_origen";
-          await sendText(from, "🚢 *Marítimo LCL:* Indicá el puerto de origen.");
+          s.step="mar_origen";
+          await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
         }
         return res.sendStatus(200);
       }
-      if (buttonId.startsWith("cont_")) {
-        s.data.contenedor = buttonId === "cont_20" ? "20" : "40";
-        s.step = "mar_origen";
-        await sendText(from, `🚢 *Marítimo FCL ${s.data.contenedor}:* Indicá el puerto de origen.`);
+      if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
+        s.data.contenedor = btnId.replace("mar_FCL","");
+        s.step="mar_origen";
+        await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
         return res.sendStatus(200);
       }
 
       // Aéreo subtipo
-      if (buttonId === "aer_carga" || buttonId === "aer_courier") {
-        s.data.aereo_tipo = buttonId === "aer_carga" ? "carga_general" : "courier";
-        if (s.data.aereo_tipo === "courier") {
-          s.step = "courier_origen";
-          await sendText(from, "✈️ *Courier:* Indicá el país de origen.");
+      if (btnId==="aer_carga" || btnId==="aer_courier"){
+        s.data.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
+        if (s.data.aereo_tipo==="carga_general"){
+          s.step="aer_origen";
+          await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai).");
         } else {
-          s.step = "aer_origen";
-          await sendText(from, "✈️ *Carga Aérea:* Indicá el aeropuerto de origen (ej: Miami, PVG o IATA).");
+          s.step="courier_origen";
+          await sendText(from,"🌍 *País/Ciudad ORIGEN* (ej.: España / China / USA).");
         }
         return res.sendStatus(200);
       }
 
       // Resumen
-      if (buttonId === "confirmar") {
-        s.step = "cotizar";
-      } else if (buttonId === "editar") {
-        sessions.set(from, {step:"start", data:emptyState()});
-        await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-        await sendText(from, "¡Empecemos de nuevo! 👋\n\nDecime el nombre de tu empresa.");
-        s.step = "ask_empresa";
-        return res.sendStatus(200);
-      } else if (buttonId === "cancelar") {
-        sessions.delete(from);
-        await sendText(from, "Tu solicitud ha sido cancelada. ¡Que tengas un buen día!");
-        return res.sendStatus(200);
-      }
+      if (btnId==="confirmar"){ s.step="cotizar"; }
+      if (btnId==="editar"){ await showWelcomeOnce(); s.step="ask_empresa"; return res.sendStatus(200); }
+      if (btnId==="cancelar"){ sessions.delete(from); await sendText(from,"Solicitud cancelada. ¡Gracias!"); return res.sendStatus(200); }
 
-      // Post-cotización: EXW
-      if (buttonId === "exw_si") {
-        s.step = "exw_dir";
-        await sendText(from, "📍 *Dirección EXW* (calle, ciudad, CP, país).");
-        return res.sendStatus(200);
-      }
-      if (buttonId === "exw_no") {
-        s.step = "ask_despacho";
-        await upsellDespacho(from);
-        return res.sendStatus(200);
-      }
-
-      // Despacho
-      if (buttonId === "desp_si") {
-        s.step = "despacho_valor";
-        await sendText(from, "Perfecto. Indicá el *valor de la mercadería (USD)*.");
-        return res.sendStatus(200);
-      }
-      if (buttonId === "desp_no") {
-        s.step = "done";
-        await sendText(from, "¡Entendido! Gracias por utilizar nuestro bot. 🙌");
-        sessions.delete(from);
-        return res.sendStatus(200);
-      }
+      // EXW y despacho
+      if (btnId==="exw_si"){ s.step="exw_dir"; await sendText(from,"📍 *Dirección EXW* (calle, ciudad, CP, país)."); return res.sendStatus(200); }
+      if (btnId==="exw_no"){ s.step="ask_despacho"; await upsellDespacho(from); return res.sendStatus(200); }
+      if (btnId==="desp_si"){ s.step="desp_valor"; await sendText(from,"💰 *Valor de la mercadería (USD)*"); return res.sendStatus(200); }
+      if (btnId==="desp_no"){ sessions.delete(from); await sendText(from,"¡Gracias por tu consulta! 🙌\n📧 comercial@conektarsa.com"); return res.sendStatus(200); }
     }
 
-    /* ====== TEXTO ====== */
-    if (type === "text") {
-      if (s.step === "ask_empresa") {
-        s.data.empresa = bodyTxt;
-        await sendMainMenu(from, s.data.empresa);
+    /* ===== TEXTO ===== */
+    if (type==="text") {
+      // Empresa
+      if (s.step==="ask_empresa"){
+        s.data.empresa = text;
+        await sendText(from, `Gracias. Empresa guardada: *${s.data.empresa}*`);
+        // si ya había modo elegido, retomar
+        if (s.data.modo==="maritimo"){
+          s.step="mar_tipo";
+          await sendButtons(from,"🚢 *Marítimo:* Elegí modalidad",[
+            { id:"mar_LCL", title:"LCL" },
+            { id:"mar_FCL", title:"FCL" }
+          ]);
+        } else if (s.data.modo==="aereo"){
+          s.step="aereo_subtipo";
+          await sendButtons(from,"✈️ *Aéreo:* ¿Qué necesitás cotizar?",[
+            { id:"aer_carga",   title:"Carga general" },
+            { id:"aer_courier", title:"Courier" }
+          ]);
+        } else if (s.data.modo==="terrestre"){
+          s.data.terrestre_tipo="FTL";
+          s.step="ter_origen";
+          await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN.");
+        }
         return res.sendStatus(200);
       }
 
       // Marítimo
-      if (s.step === "mar_origen") {
-        s.data.origen_puerto = bodyTxt;
-        s.step = "resumen";               // setear step fuera de askResumen
+      if (s.step==="mar_origen"){
+        s.data.origen_puerto = text;
         await askResumen(from, s.data);
         return res.sendStatus(200);
       }
 
       // Aéreo carga general
-      if (s.step === "aer_origen") {
-        s.data.origen_aeropuerto = bodyTxt;
-        s.step = "aer_peso";
-        await sendText(from, "⚖️ Indicá el *peso en kg* (solo número).");
+      if (s.step==="aer_origen"){
+        s.data.origen_aeropuerto = text;
+        s.step="aer_peso";
+        await sendText(from,"⚖️ *Peso (kg)* (entero).");
         return res.sendStatus(200);
       }
-      if (s.step === "aer_peso") {
-        const peso = toNum(bodyTxt);
-        if (isNaN(peso)) { await sendText(from, "Ingresá un peso válido (solo números)."); return res.sendStatus(200); }
+      if (s.step==="aer_peso"){
+        const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
         s.data.peso_kg = Math.max(0, Math.round(peso));
-        s.step = "aer_vol";
-        await sendText(from, "📦 Indicá el *peso volumétrico en kg* (opcional, poné 0 si no sabés).");
+        s.step="aer_vol";
+        await sendText(from,"📦 *Peso volumétrico (kg)* (poné 0 si no sabés).");
         return res.sendStatus(200);
       }
-      if (s.step === "aer_vol") {
-        const vol = toNum(bodyTxt);
-        if (isNaN(vol)) { await sendText(from, "Ingresá un valor válido (solo números)."); return res.sendStatus(200); }
+      if (s.step==="aer_vol"){
+        const vol = toNum(text); if (isNaN(vol)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
         s.data.vol_cbm = Math.max(0, vol);
-        s.step = "resumen";
         await askResumen(from, s.data);
         return res.sendStatus(200);
       }
 
       // Courier
-      if (s.step === "courier_origen") {
-        s.data.origen_aeropuerto = bodyTxt; // país
-        s.step = "courier_peso";
-        await sendText(from, "⚖️ Indicá el *peso en kg* (podés usar decimales).");
+      if (s.step==="courier_origen"){
+        s.data.origen_aeropuerto = text; // país/ciudad
+        s.step="courier_peso";
+        await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales).");
         return res.sendStatus(200);
       }
-      if (s.step === "courier_peso") {
-        const peso = toNum(bodyTxt);
-        if (isNaN(peso)) { await sendText(from, "Ingresá un peso válido (solo números)."); return res.sendStatus(200); }
+      if (s.step==="courier_peso"){
+        const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
         s.data.peso_kg = peso;
-        s.step = "resumen";
         await askResumen(from, s.data);
         return res.sendStatus(200);
       }
 
       // Terrestre
-      if (s.step === "ter_origen") {
-        s.data.origen_direccion = bodyTxt;
-        s.step = "resumen";
+      if (s.step==="ter_origen"){
+        s.data.origen_direccion = text;
         await askResumen(from, s.data);
         return res.sendStatus(200);
       }
 
-      // EXW dirección
-      if (s.step === "exw_dir") {
-        s.data.exw_dir = bodyTxt;
-        await sendText(from, "🧑‍💼 El equipo comercial está trabajando en la solicitud y te contactaremos en breve.");
-        s.step = "ask_despacho";
+      // EXW
+      if (s.step==="exw_dir"){
+        s.data.exw_dir = text;
+        await sendText(from,"🧑‍💼 El equipo comercial está trabajando en la solicitud y te contactaremos en breve.");
+        s.step="ask_despacho";
         await upsellDespacho(from);
         return res.sendStatus(200);
       }
 
       // Despacho
-      if (s.step === "despacho_valor") {
-        s.data.valor_mercaderia = bodyTxt;
-        s.step = "despacho_tipo_mercaderia";
-        await sendText(from, "Ahora, contanos *qué mercadería es*.");
+      if (s.step==="desp_valor"){
+        s.data.valor_mercaderia = text;
+        s.step="desp_merc";
+        await sendText(from,"📦 *¿Qué mercadería es?*");
         return res.sendStatus(200);
       }
-      if (s.step === "despacho_tipo_mercaderia") {
-        s.data.tipo_mercaderia = bodyTxt;
-        s.step = "done";
-        await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp-despacho", s.data.valor_mercaderia, s.data.tipo_mercaderia]);
-        await sendText(from, "Gracias, en breve nos comunicaremos contigo para brindarte la tarifa de despacho. 🙌");
+      if (s.step==="desp_merc"){
+        s.data.tipo_mercaderia = text;
+        await sendText(from,"Gracias, en breve nos comunicaremos contigo para brindarte la tarifa. 🙌");
         sessions.delete(from);
         return res.sendStatus(200);
       }
     }
 
-    /* ====== COTIZAR ====== */
-    if (s.step === "cotizar") {
-      try {
-        if (s.data.modo === "aereo" && s.data.aereo_tipo === "carga_general") {
-          const r = await cotizarAereo({ origen: s.data.origen_aeropuerto, kg: s.data.peso_kg || 0, vol: s.data.vol_cbm || 0 });
-          if (!r) { await sendText(from, "❌ No encontré esa ruta en *Aéreos*. Probá con ciudad o IATA (PVG, PEK, NRT)."); return res.sendStatus(200); }
+    /* ===== COTIZAR ===== */
+    if (s.step==="cotizar"){
+      try{
+        if (s.data.modo==="aereo" && s.data.aereo_tipo==="carga_general"){
+          const r = await cotizarAereo({ origen: s.data.origen_aeropuerto, kg: s.data.peso_kg||0, vol: s.data.vol_cbm||0 });
+          if (!r){ await sendText(from,"❌ No encontré esa ruta en *Aéreos*. Probá con ciudad o IATA (PVG, PEK, NRT)."); return res.sendStatus(200); }
           const unit = `USD ${fmt(r.pricePerKg)} por KG (FOB)`;
-          const min = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
+          const min  = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
           const resp =
 `✅ *Tarifa estimada (AÉREO – Carga general)*
 ${unit} + *Gastos Locales*.${min}
@@ -580,24 +573,24 @@ ${unit} + *Gastos Locales*.${min}
 *Validez:* ${VALIDEZ_DIAS} días
 *Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp", "aereo", s.data.origen_aeropuerto, r.destino, s.data.peso_kg || "", s.data.vol_cbm || "", "", r.totalUSD, `Aéreo ${s.data.origen_aeropuerto}→${r.destino}`]);
-        } else if (s.data.modo === "aereo" && s.data.aereo_tipo === "courier") {
-          const r = await cotizarCourier({ pais: s.data.origen_aeropuerto, kg: s.data.peso_kg || 0 });
-          if (!r) { await sendText(from, "❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","aereo", s.data.origen_aeropuerto, r.destino, s.data.peso_kg||"", s.data.vol_cbm||"", "", r.totalUSD, `Aéreo ${s.data.origen_aeropuerto}→${r.destino}`]);
+        } else if (s.data.modo==="aereo" && s.data.aereo_tipo==="courier"){
+          const r = await cotizarCourier({ pais: s.data.origen_aeropuerto, kg: s.data.peso_kg||0 });
+          if (!r){ await sendText(from,"❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
           const resp =
-`✅ *Tarifa estimada (COURIER ${s.data.courier_persona || ""})*
+`✅ *Tarifa estimada (COURIER)*
 *Peso:* ${fmt(s.data.peso_kg)} kg${nota}
 *Total:* USD ${fmt(r.totalUSD)} + *Gastos Locales*
 
 *Validez:* ${VALIDEZ_DIAS} días
 *Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp", "courier", s.data.origen_aeropuerto, r.destino, s.data.peso_kg || "", "", "", r.totalUSD, `Courier ${s.data.origen_aeropuerto}→${r.destino}`]);
-        } else if (s.data.modo === "maritimo") {
-          const modalidad = s.data.maritimo_tipo === "FCL" ? (s.data.contenedor ? `FCL${s.data.contenedor}` : "FCL") : "LCL";
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","courier", s.data.origen_aeropuerto, r.destino, s.data.peso_kg||"", "", "", r.totalUSD, `Courier ${s.data.origen_aeropuerto}`]);
+        } else if (s.data.modo==="maritimo"){
+          const modalidad = s.data.maritimo_tipo==="FCL" ? (s.data.contenedor?`FCL${s.data.contenedor}`:"FCL") : "LCL";
           const r = await cotizarMaritimo({ origen: s.data.origen_puerto, modalidad });
-          if (!r) { await sendText(from, "❌ No encontré esa ruta/modalidad en *Marítimos*. Usá el nombre tal cual figura."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*. Usá el nombre tal cual figura."); return res.sendStatus(200); }
           const resp =
 `✅ *Tarifa estimada (Marítimo ${modalidad})*
 USD ${fmt(r.totalUSD)} + *Gastos Locales*.
@@ -606,10 +599,10 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 *Validez:* ${VALIDEZ_DIAS} días
 *Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp", "maritimo", s.data.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.data.origen_puerto}→${r.destino}`]);
-        } else if (s.data.modo === "terrestre") {
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","maritimo", s.data.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.data.origen_puerto}→${r.destino}`]);
+        } else if (s.data.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.data.origen_direccion || "" });
-          if (!r) { await sendText(from, "❌ No encontré esa ruta en *Terrestres*. Usá el nombre tal cual figura."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,"❌ No encontré esa ruta en *Terrestres*."); return res.sendStatus(200); }
           const resp =
 `✅ *Tarifa estimada (TERRESTRE FTL)*
 USD ${fmt(r.totalUSD)} + *Gastos Locales*.
@@ -617,40 +610,32 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 *Validez:* ${VALIDEZ_DIAS} días
 *Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp", "terrestre", s.data.origen_direccion || "", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.data.origen_direccion}→${r.destino}`]);
+          await logSolicitud([new Date().toISOString(), from, "", s.data.empresa, "whatsapp","terrestre", s.data.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.data.origen_direccion}→${r.destino}`]);
         }
 
-        await sendText(from, "✨ *Tu consulta de flete ha sido registrada.*\nNuestro equipo comercial te contactará pronto con una respuesta personalizada.\n📧 comercial@conektarsa.com");
-        s.step = "ask_exw";
+        await sendText(from, "✅ *Tu consulta ha sido registrada correctamente.*\nNuestro equipo comercial te contactará pronto para darte una respuesta personalizada.\n📧 comercial@conektarsa.com");
+        s.step = "exw_q";
         await sendButtons(from, "¿Tu carga es EXW?", [
-          { id: "exw_si", title: "Sí" },
-          { id: "exw_no", title: "No" }
+          { id:"exw_si", title:"Sí" },
+          { id:"exw_no", title:"No" }
         ]);
-
-      } catch (e) {
+      }catch(e){
         console.error("cotizar error", e);
-        await sendText(from, "⚠️ Hubo un problema al procesar tu solicitud. Revisá pestañas y permisos en Google Sheets.");
+        await sendText(from,"⚠️ Hubo un problema al leer la planilla. Revisá nombres de pestañas y permisos.");
       }
       return res.sendStatus(200);
     }
 
-    // Fallback
-    if (s.step !== "done") {
-      sessions.set(from, {step:"start", data:emptyState()});
-      await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-      await sendText(from, "¡Bienvenido/a al *Bot de Cotizaciones de Conektar S.A.*! 👋\n\nPara empezar, decime el nombre de tu empresa.");
-      s.step = "ask_empresa";
-    }
+    // nada más que hacer, no reseteamos
     return res.sendStatus(200);
-
-  } catch(e) {
+  }catch(e){
     console.error("webhook error", e);
     return res.sendStatus(200);
   }
 });
 
-/* ====== Server ====== */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2-fix"));
+/* ====== HEALTH ====== */
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.2"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2-fix en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.2 en http://localhost:${PORT}`));
