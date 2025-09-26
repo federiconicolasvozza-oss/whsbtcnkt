@@ -1,8 +1,8 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.4
-// - Helpers estilo snippet compartido (sendMenu/sendModos/...)
-// - Mantiene flujo de cotización anterior (AÉREO/COURIER, MARÍTIMO LCL/FCL, TERRESTRE FTL)
-// - Bienvenida con logo (usa URL provista), flags welcomed/askedEmpresa
-// - EXW + upsell despacho + logging a hoja de "Solicitudes"
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.5
+// - Bienvenida amable: logo → pedir empresa → botones de modo
+// - Pide empresa una sola vez (welcomed/askedEmpresa)
+// - Cotizadores: AÉREO (carga general / courier), MARÍTIMO (LCL/FCL), TERRESTRE (FTL)
+// - EXW + upsell despacho + logging a hoja "Solicitudes"
 
 import express from "express";
 import dotenv from "dotenv";
@@ -22,7 +22,7 @@ const WHATSAPP_TOKEN = (process.env.WHATSAPP_TOKEN || "").trim();
 const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
 
-// Planilla de tarifas (mismo esquema previo)
+// Planilla de tarifas
 const TAR_SHEET_ID = (process.env.GOOGLE_TARIFFS_SHEET_ID || "").trim();
 const TAB_AER_HINT = (process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aereos").trim();
 const TAB_MAR_HINT = (process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").trim();
@@ -37,11 +37,11 @@ const LOG_TAB = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
 const AEREO_MIN_KG = Number(process.env.AEREO_MIN_KG ?? 100);
 const VALIDEZ_DIAS = Number(process.env.VALIDEZ_DIAS ?? 7);
 
-// LOGO: usá tu URL directa (sirve para WhatsApp Cloud si devuelve image/*)
+// Logo (URL directa válida para WhatsApp)
 const LOGO_URL = (process.env.LOGO_URL ||
   "https://conektarsa.com/wp-content/uploads/2025/05/LogoCH80px.png").trim();
 
-/* ========= Rutas de credenciales Google ========= */
+/* ========= Credenciales Google ========= */
 function chooseCredPath(filename) {
   const fromSecrets = path.join("/etc/secrets", filename);
   const fromRepo = path.join(process.cwd(), "credentials", filename);
@@ -51,7 +51,6 @@ function chooseCredPath(filename) {
 const CLIENT_PATH = chooseCredPath("oauth_client.json");
 const TOKEN_PATH  = chooseCredPath("oauth_token.json");
 
-/* ========= OAuth Google ========= */
 function getOAuth() {
   const missing = [];
   try { fs.accessSync(CLIENT_PATH);} catch { missing.push("oauth_client.json"); }
@@ -66,7 +65,7 @@ function getOAuth() {
 }
 const sheetsClient = () => google.sheets({ version: "v4", auth: getOAuth() });
 
-/* ========= Helpers generales ========= */
+/* ========= Utils ========= */
 const norm = s => (s||"").toString().toLowerCase()
   .normalize("NFD").replace(/\p{Diacritic}/gu,"")
   .replace(/[^\p{L}\p{N}\s()]/gu,"").replace(/\s+/g," ").trim();
@@ -117,9 +116,9 @@ const sendButtons = (to, text, buttons) =>
 const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
-// Menú de modos (como tu snippet)
+// Menú de modos (más cercano)
 const sendModos = (to) =>
-  sendButtons(to, "¿Qué tipo de flete querés cotizar?", [
+  sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"menu_maritimo",  title:"🚢 Marítimo" },
     { id:"menu_aereo",     title:"✈️ Aéreo" },
     { id:"menu_terrestre", title:"🚚 Terrestre" },
@@ -138,7 +137,7 @@ const sendContenedores = (to) =>
     { id:"mar_FCL40HC",title:"40' HC" },
   ]);
 
-/* ========= Lectura de pestañas con tolerancia ========= */
+/* ========= Tabs con tolerancia ========= */
 const tabCache = new Map();
 async function resolveTabTitle(sheetId, hint, extras = []) {
   const n = norm(hint);
@@ -173,7 +172,7 @@ async function readTabRange(sheetId, tabHint, a1Core, extras=[]) {
   return r.data.values || [];
 }
 
-/* ========= LOG a hoja "Solicitudes" ========= */
+/* ========= LOG a "Solicitudes" ========= */
 async function logSolicitud(values) {
   try {
     await sheetsClient().spreadsheets.values.append({
@@ -195,7 +194,7 @@ const COUNTRY_TO_REGION = {
   "china":"asia","hong kong":"asia","india":"asia","japon":"asia","japón":"asia","corea":"asia","singapur":"asia","tailandia":"asia","vietnam":"asia","malasia":"asia","indonesia":"asia","emiratos arabes":"asia","emiratos árabes":"asia","arabia saudita":"asia","qatar":"asia","turquia":"asia","turquía":"asia","doha":"asia","dubai":"asia"
 };
 
-/* ========= Alias aeropuertos comunes ========= */
+/* ========= Alias aeropuertos ========= */
 const AIR_ALIASES = {
   "shanghai":"shanghai (pvg)|pvg|shanghai",
   "beijing":"beijing (pek)|pek|beijing|pekin|peking",
@@ -388,15 +387,23 @@ app.post("/webhook", async (req,res)=>{
     const lower = norm(text);
     const btnId = (type==="interactive") ? (msg.interactive?.button_reply?.id || "") : "";
 
-    // Bienvenida (una vez)
+    // Bienvenida (amena) — ORDEN: logo → pedir empresa → botones
     const showWelcomeOnce = async () => {
       if (s.welcomed) return;
       s.welcomed = true;
+
       await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-      await sendModos(from);
-      await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
+
+      await sendText(
+        from,
+        "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
+        "Acá vas a poder *cotizar fletes internacionales* y *calcular el costo estimativo* de tus productos.\n\n" +
+        "Para empezar, decime el *nombre de tu empresa*."
+      );
       s.step = "ask_empresa";
       s.askedEmpresa = true;
+
+      await sendModos(from);
     };
 
     // Palabras de arranque
@@ -595,7 +602,7 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.4"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.5"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2.4 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.5 en http://localhost:${PORT}`));
