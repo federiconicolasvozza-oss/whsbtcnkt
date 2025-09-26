@@ -111,8 +111,8 @@ const sendImage = (to, link, caption="") =>
 /* ---- Menús ---- */
 const sendMainActions = (to) =>
   sendButtons(to, "¿Qué te gustaría hacer hoy?", [
-    { id:"action_cotizar",  title:"💼 Cotizar flete internacional" },
-    { id:"action_calcular", title:"🧮 Calcular costo de importación" },
+    { id:"action_cotizar",  title:"💼 Cotizar Flete Int" },
+    { id:"action_calcular", title:"🧮 Calcular Costo Impo" },
   ]);
 
 const sendModos = (to) =>
@@ -591,3 +591,4 @@ app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Flete
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 app.listen(PORT, ()=> console.log(`🚀 Bot v2.8 en http://localhost:${PORT}`));
+
