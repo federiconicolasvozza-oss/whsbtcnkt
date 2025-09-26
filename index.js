@@ -1,8 +1,4 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.7
-// Orden: [IMG+CAPTION bienvenida] → [pregunta empresa] → (usuario responde) → [botones de acción]
-// Acciones: 1) Cotizar flete internacional (flujo Marítimo/Aéreo/Terrestre)
-//           2) Calcular costo de importación (placeholder de momento)
-
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.8
 import express from "express";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -10,7 +6,6 @@ import path from "path";
 import { google } from "googleapis";
 
 dotenv.config();
-
 const app = express();
 app.use(express.json({ limit: "20mb" }));
 
@@ -21,26 +16,22 @@ const WHATSAPP_TOKEN = (process.env.WHATSAPP_TOKEN || "").trim();
 const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
 
-// Planilla de tarifas
 const TAR_SHEET_ID = (process.env.GOOGLE_TARIFFS_SHEET_ID || "").trim();
 const TAB_AER_HINT = (process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aereos").trim();
 const TAB_MAR_HINT = (process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").trim();
 const TAB_TER_HINT = (process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
 const TAB_COU_HINT = (process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
 
-// Log de solicitudes
 const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
 
-// Parámetros de negocio
 const AEREO_MIN_KG = Number(process.env.AEREO_MIN_KG ?? 100);
 const VALIDEZ_DIAS = Number(process.env.VALIDEZ_DIAS ?? 7);
 
-// Logo (link directo válido para WhatsApp)
 const LOGO_URL = (process.env.LOGO_URL ||
   "https://conektarsa.com/wp-content/uploads/2025/05/LogoCH80px.png").trim();
 
-/* ========= Credenciales Google ========= */
+/* ========= Google OAuth ========= */
 function chooseCredPath(filename) {
   const fromSecrets = path.join("/etc/secrets", filename);
   const fromRepo = path.join(process.cwd(), "credentials", filename);
@@ -65,6 +56,8 @@ function getOAuth() {
 const sheetsClient = () => google.sheets({ version: "v4", auth: getOAuth() });
 
 /* ========= Utils ========= */
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 const norm = s => (s||"").toString().toLowerCase()
   .normalize("NFD").replace(/\p{Diacritic}/gu,"")
   .replace(/[^\p{L}\p{N}\s()]/gu,"").replace(/\s+/g," ").trim();
@@ -116,15 +109,12 @@ const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
 /* ---- Menús ---- */
-
-// Acciones principales (después de que el usuario responde la empresa)
 const sendMainActions = (to) =>
   sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"💼 Cotizar flete internacional" },
-    { id:"action_calcular", title:"🧮 Calcular costo de importación" }, // placeholder
+    { id:"action_calcular", title:"🧮 Calcular costo de importación" },
   ]);
 
-// Menú de modos (cuando elige Cotizar flete internacional)
 const sendModos = (to) =>
   sendButtons(to, "Elegí el modo de transporte:", [
     { id:"menu_maritimo",  title:"🚢 Marítimo" },
@@ -145,7 +135,7 @@ const sendContenedores = (to) =>
     { id:"mar_FCL40HC",title:"40' HC" },
   ]);
 
-/* ========= Tabs con tolerancia ========= */
+/* ========= Tabs ========= */
 const tabCache = new Map();
 async function resolveTabTitle(sheetId, hint, extras = []) {
   const n = norm(hint);
@@ -180,7 +170,7 @@ async function readTabRange(sheetId, tabHint, a1Core, extras=[]) {
   return r.data.values || [];
 }
 
-/* ========= LOG a "Solicitudes" ========= */
+/* ========= LOG ========= */
 async function logSolicitud(values) {
   try {
     await sheetsClient().spreadsheets.values.append({
@@ -194,7 +184,7 @@ async function logSolicitud(values) {
   }
 }
 
-/* ========= Courier: mapa región ========= */
+/* ========= Courier regiones ========= */
 const COUNTRY_TO_REGION = {
   "argentina":"america sur","brasil":"america sur","chile":"america sur","uruguay":"america sur","paraguay":"america sur","bolivia":"america sur","peru":"america sur","colombia":"america sur","ecuador":"america sur","venezuela":"america sur",
   "estados unidos":"usa & canadá","usa":"usa & canadá","eeuu":"usa & canadá","united states":"usa & canadá","canada":"usa & canadá","canadá":"usa & canadá",
@@ -202,7 +192,7 @@ const COUNTRY_TO_REGION = {
   "china":"asia","hong kong":"asia","india":"asia","japon":"asia","japón":"asia","corea":"asia","singapur":"asia","tailandia":"asia","vietnam":"asia","malasia":"asia","indonesia":"asia","emiratos arabes":"asia","emiratos árabes":"asia","arabia saudita":"asia","qatar":"asia","turquia":"asia","turquía":"asia","doha":"asia","dubai":"asia"
 };
 
-/* ========= Alias aeropuertos ========= */
+/* ========= Aeropuertos alias ========= */
 const AIR_ALIASES = {
   "shanghai":"shanghai (pvg)|pvg|shanghai",
   "beijing":"beijing (pek)|pek|beijing|pekin|peking",
@@ -311,7 +301,7 @@ async function cotizarCourier({ pais, kg }) {
   return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Ezeiza (EZE)" };
 }
 
-/* ========= Estado (sesiones) ========= */
+/* ========= Estado ========= */
 const sessions = new Map();
 const emptyState = () => ({
   empresa:null, modo:null,
@@ -326,7 +316,7 @@ const emptyState = () => ({
 });
 function getS(id){ if(!sessions.has(id)) sessions.set(id, { data: emptyState() }); return sessions.get(id); }
 
-/* ========= UI / Resumen ========= */
+/* ========= UI ========= */
 function modoMayus(m) {
   const map = { aereo:"AÉREO", maritimo:"MARÍTIMO", terrestre:"TERRESTRE" };
   return map[m] || (m||"").toUpperCase();
@@ -395,20 +385,19 @@ app.post("/webhook", async (req,res)=>{
     const lower = norm(text);
     const btnId = (type==="interactive") ? (msg.interactive?.button_reply?.id || "") : "";
 
-    /* -------- BIENVENIDA (logo + caption; luego pregunta empresa) -------- */
+    // Bienvenida: IMG+CAPTION primero, luego pregunta empresa (forzamos orden con sleep)
     const showWelcomeOnce = async () => {
       if (s.welcomed) return;
       s.welcomed = true;
 
-      // 1) Un solo mensaje: IMAGEN + CAPTION (presentación)
       await sendImage(
         from,
         LOGO_URL,
         "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
           "Acá vas a poder *cotizar fletes internacionales* y *estimar el costo de tu importación*."
       );
+      await sleep(700); // ← pausa corta para evitar inversión de orden en el cliente
 
-      // 2) Mensaje aparte: primera pregunta
       await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
       s.step = "ask_empresa";
       s.askedEmpresa = true;
@@ -427,7 +416,6 @@ app.post("/webhook", async (req,res)=>{
     /* ===== BOTONES ===== */
     if (type==="interactive") {
 
-      // Acciones principales
       if (btnId==="action_cotizar"){
         s.step = "choose_modo";
         await sendModos(from);
@@ -439,7 +427,6 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Menú de modos
       if (btnId.startsWith("menu_")){
         s.modo = btnId.replace("menu_","");
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
@@ -454,7 +441,6 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Marítimo
       if (btnId==="mar_LCL" || btnId==="mar_FCL"){
         s.maritimo_tipo = (btnId==="mar_LCL") ? "LCL" : "FCL";
         if (s.maritimo_tipo==="FCL"){ s.step="mar_equipo"; await sendContenedores(from); }
@@ -468,7 +454,6 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Aéreo subtipo
       if (btnId==="aer_carga" || btnId==="aer_courier"){
         s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
         if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
@@ -476,12 +461,10 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Resumen/confirmación
       if (btnId==="confirmar"){ s.step="cotizar"; }
       if (btnId==="editar"){ await sendMainActions(from); s.step="ask_empresa"; return res.sendStatus(200); }
       if (btnId==="cancelar"){ sessions.delete(from); await sendText(from,"Solicitud cancelada. ¡Gracias!"); return res.sendStatus(200); }
 
-      // EXW / Despacho
       if (btnId==="exw_si"){ s.step="exw_dir"; await sendText(from,"📍 *Dirección EXW* (calle, ciudad, CP, país)."); return res.sendStatus(200); }
       if (btnId==="exw_no"){ s.step="ask_despacho"; await upsellDespacho(from); return res.sendStatus(200); }
       if (btnId==="desp_si"){ s.step="desp_valor"; await sendText(from,"💰 *Valor de la mercadería (USD)*"); return res.sendStatus(200); }
@@ -490,7 +473,6 @@ app.post("/webhook", async (req,res)=>{
 
     /* ===== TEXTO ===== */
     if (type==="text") {
-      // Empresa (al responder mostramos recién aquí las acciones principales)
       if (s.step==="ask_empresa"){
         s.empresa = text;
         s.askedEmpresa = true;
@@ -499,10 +481,8 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      // Marítimo
       if (s.step==="mar_origen"){ s.origen_puerto = text; await askResumen(from, s); return res.sendStatus(200); }
 
-      // Aéreo Carga general
       if (s.step==="aer_origen"){ s.origen_aeropuerto = text; s.step="aer_peso"; await sendText(from,"⚖️ *Peso (kg)* (entero)."); return res.sendStatus(200); }
       if (s.step==="aer_peso"){
         const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
@@ -514,20 +494,16 @@ app.post("/webhook", async (req,res)=>{
         s.vol_cbm = Math.max(0, vol); await askResumen(from, s); return res.sendStatus(200);
       }
 
-      // Courier
       if (s.step==="courier_origen"){ s.origen_aeropuerto = text; s.step="courier_peso"; await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales)."); return res.sendStatus(200); }
       if (s.step==="courier_peso"){
         const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
         s.peso_kg = peso; await askResumen(from, s); return res.sendStatus(200);
       }
 
-      // Terrestre
       if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumen(from, s); return res.sendStatus(200); }
 
-      // EXW
       if (s.step==="exw_dir"){ s.exw_dir = text; await sendText(from,"🧑‍💼 El equipo comercial está trabajando en la solicitud y te contactaremos en breve."); s.step="ask_despacho"; await upsellDespacho(from); return res.sendStatus(200); }
 
-      // Despacho
       if (s.step==="desp_valor"){ s.valor_mercaderia = text; s.step="desp_merc"; await sendText(from,"📦 *¿Qué mercadería es?*"); return res.sendStatus(200); }
       if (s.step==="desp_merc"){ s.tipo_mercaderia = text; await sendText(from,"Gracias, en breve nos comunicaremos contigo para brindarte la tarifa. 🙌"); sessions.delete(from); return res.sendStatus(200); }
     }
@@ -611,7 +587,7 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.7"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.8"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2.7 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.8 en http://localhost:${PORT}`));
