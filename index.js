@@ -1,5 +1,6 @@
-// index.js — ESM ✅ (compatible con "type":"module")
-// Bot Cotizador de Fletes (Conektar S.A.)
+// index.js — ESM ✅ (solo BOTONES, máx 3) — Flujo según “MODELO FLUJO FLETE BOT”
+// Menú: [Marítimo] [Aéreo] [Terrestre]; Aéreo: [Carga general] [Courier] [Volver]
+// Marítimo: [LCL] [FCL] [Volver]; FCL equipo: [1×20’] [1×40’] [1×40’ HC]
 
 import express from "express";
 import dotenv from "dotenv";
@@ -227,16 +228,15 @@ async function cotizarCourier({ pais, kg }) {
   };
 }
 
-/* ====== UI ====== */
+/* ====== UI (solo BOTONES) ====== */
 async function sendHome(to) {
   return sendButtons(
     to,
-    "👋 *Bienvenido al Cotizador de Fletes de Conektar S.A.*\nElegí el tipo de flete:",
+    "👋 *Bienvenido al Cotizador de Fletes de Conektar S.A.*\n¿Qué tipo de flete deseás cotizar?",
     [
-      { id:"menu_maritimo", title:"🚢 Marítimo" },
-      { id:"menu_aereo",    title:"✈️ Aéreo" },
-      { id:"menu_terrestre",title:"🚛 Terrestre" },
-      { id:"menu_courier",  title:"📦 Courier" }
+      { id:"menu_maritimo",  title:"🚢 Marítimo" },
+      { id:"menu_aereo",     title:"✈️ Aéreo" },
+      { id:"menu_terrestre", title:"🚛 Terrestre" }
     ]
   );
 }
@@ -264,61 +264,105 @@ app.post("/webhook", async (req,res)=>{
     const bodyTxt = type==="text" ? (msg.text?.body || "").trim() : "";
     const lower = norm(bodyTxt);
 
+    // Comandos globales
     if (type==="text" && ["hola","menu","inicio","volver","start"].includes(lower)) {
       sessions.delete(from); await sendHome(from); return res.sendStatus(200);
     }
 
+    // INTERACTIVE (BOTONES)
     if (type === "interactive") {
-      const id = msg.interactive?.button_reply?.id || msg.interactive?.list_reply?.id;
+      const id = msg.interactive?.button_reply?.id;
 
-      if (id?.startsWith("menu_")) {
-        s.data.tipo = id.replace("menu_","");
+      // Menú principal
+      if (id === "menu_maritimo") {
+        s.data.tipo = "maritimo";
+        s.step = "empresa";
+        await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
+        return res.sendStatus(200);
+      }
+      if (id === "menu_aereo") {
+        s.data.tipo = "aereo";
+        s.step = "empresa";
+        await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
+        return res.sendStatus(200);
+      }
+      if (id === "menu_terrestre") {
+        s.data.tipo = "terrestre";
         s.step = "empresa";
         await sendText(from, "🏢 *Decime tu empresa* (ej.: Importodo SRL).");
         return res.sendStatus(200);
       }
 
-      if (id?.startsWith("mar_")) {
-        s.data.modalidad = id.replace("mar_","").toUpperCase();
+      // Submenús
+      if (id === "mar_LCL" || id === "mar_FCL" || id === "mar_volver") {
+        if (id === "mar_volver") { await sendHome(from); sessions.delete(from); return res.sendStatus(200); }
+        s.data.modalidad = id === "mar_LCL" ? "LCL" : "FCL";
+        if (s.data.modalidad === "FCL") {
+          s.step = "mar_equipo";
+          await sendButtons(from, "⚓ *Elegí equipo*", [
+            { id:"mar_FCL20",  title:"1×20’" },
+            { id:"mar_FCL40",  title:"1×40’" },
+            { id:"mar_FCL40HC",title:"1×40’ HC" }
+          ]);
+        } else {
+          s.step = "origen";
+          await sendText(from, "📍 *Origen* (puerto de salida, ej.: Shanghai / Ningbo / Shenzhen).");
+        }
+        return res.sendStatus(200);
+      }
+
+      if (id === "aer_carga" || id === "aer_courier" || id === "aer_volver") {
+        if (id === "aer_volver") { await sendHome(from); sessions.delete(from); return res.sendStatus(200); }
+        s.data.subtipo = (id === "aer_carga") ? "carga" : "courier";
+        s.step = (s.data.subtipo === "carga") ? "origen" : "pais";
+        if (s.data.subtipo === "carga") {
+          await sendText(from,"✈️ *Origen* (aeropuerto, ej.: Shanghai (PVG), Guangzhou (CAN)).");
+        } else {
+          await sendText(from,"🌍 *País de origen* (ej.: España, China, Estados Unidos).");
+        }
+        return res.sendStatus(200);
+      }
+
+      if (id === "mar_FCL20" || id === "mar_FCL40" || id === "mar_FCL40HC") {
+        s.data.modalidad = id.replace("mar_",""); // FCL20/FCL40/FCL40HC
         s.step = "origen";
         await sendText(from, "📍 *Origen* (puerto de salida, ej.: Shanghai / Ningbo / Shenzhen).");
         return res.sendStatus(200);
       }
 
-      if (id === "aer_carga") { s.data.subtipo="carga"; s.step="origen"; await sendText(from,"✈️ Origen (aeropuerto, ej.: Shanghai (PVG), Guangzhou (CAN))."); return res.sendStatus(200); }
-      if (id === "aer_courier") { s.data.subtipo="courier"; s.step="pais"; await sendText(from,"🌍 *País de origen* (ej.: España, China, Estados Unidos)."); return res.sendStatus(200); }
-
       return res.sendStatus(200);
     }
 
+    // TEXTO
     if (type === "text") {
       if (s.step === "start") { await sendHome(from); return res.sendStatus(200); }
 
       if (s.step === "empresa") {
         s.data.empresa = bodyTxt;
+
         if (s.data.tipo === "maritimo") {
           s.step = "maritimo_modalidad";
-          await sendButtons(from, "🚢 Marítimo seleccionado. Elegí modalidad:", [
-            { id:"mar_FCL20", title:"FCL20" }, { id:"mar_FCL40", title:"FCL40" }, { id:"mar_FCL40HC", title:"FCL40HC" },
-            { id:"mar_LCL", title:"LCL" }
+          await sendButtons(from, "🚢 *Marítimo seleccionado.* Elegí modalidad:", [
+            { id:"mar_LCL",   title:"LCL" },
+            { id:"mar_FCL",   title:"FCL" },
+            { id:"mar_volver",title:"Volver" }
           ]);
           return res.sendStatus(200);
         }
+
         if (s.data.tipo === "aereo") {
           s.step = "aereo_subtipo";
           await sendButtons(from, "✈️ ¿Qué necesitás cotizar?", [
-            { id:"aer_carga", title:"Carga general" }, { id:"aer_courier", title:"Courier" }
+            { id:"aer_carga",   title:"Carga general" },
+            { id:"aer_courier", title:"Courier" },
+            { id:"aer_volver",  title:"Volver" }
           ]);
           return res.sendStatus(200);
         }
+
         if (s.data.tipo === "terrestre") {
           s.step = "origen";
           await sendText(from,"🚛 *Origen* (ciudad/país, ej.: San Pablo – Brasil, Curitiba – Brasil).");
-          return res.sendStatus(200);
-        }
-        if (s.data.tipo === "courier") {
-          s.data.subtipo="courier"; s.step="pais";
-          await sendText(from,"🌍 *País de origen* (ej.: España, China, Estados Unidos).");
           return res.sendStatus(200);
         }
       }
@@ -331,6 +375,7 @@ app.post("/webhook", async (req,res)=>{
           await sendText(from,"⚖️ *Peso (kg)* (entero).");
           return res.sendStatus(200);
         }
+
         if (s.data.tipo === "maritimo") {
           const r = await cotizarMaritimo({ origen: s.data.origen, modalidad: s.data.modalidad });
           if (!r) { await sendText(from,"❌ No encontré esa ruta/modalidad en tu planilla. Probá con el nombre tal como figura en la pestaña *Maritimos*."); return res.sendStatus(200); }
