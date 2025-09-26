@@ -1,8 +1,8 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.5
-// - Bienvenida amable: logo → pedir empresa → botones de modo
-// - Pide empresa una sola vez (welcomed/askedEmpresa)
-// - Cotizadores: AÉREO (carga general / courier), MARÍTIMO (LCL/FCL), TERRESTRE (FTL)
-// - EXW + upsell despacho + logging a hoja "Solicitudes"
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.6
+// Orden: logo → bienvenida + pedir empresa → (usuario responde) → botones de acción
+// Acciones: 1) Cotizar flete internacional (flujo Marítimo/Aéreo/Terrestre ya existente)
+//           2) Calcular costo de importación (placeholder, por ahora)
+// Mantiene lectura de planilla, logging a "Solicitudes", EXW, upsell, etc.
 
 import express from "express";
 import dotenv from "dotenv";
@@ -37,7 +37,7 @@ const LOG_TAB = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
 const AEREO_MIN_KG = Number(process.env.AEREO_MIN_KG ?? 100);
 const VALIDEZ_DIAS = Number(process.env.VALIDEZ_DIAS ?? 7);
 
-// Logo (URL directa válida para WhatsApp)
+// Logo (link directo válido para WhatsApp)
 const LOGO_URL = (process.env.LOGO_URL ||
   "https://conektarsa.com/wp-content/uploads/2025/05/LogoCH80px.png").trim();
 
@@ -116,9 +116,18 @@ const sendButtons = (to, text, buttons) =>
 const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
-// Menú de modos (más cercano)
-const sendModos = (to) =>
+/* ---- Menús ---- */
+
+// Acciones principales (después de que el usuario responde la empresa)
+const sendMainActions = (to) =>
   sendButtons(to, "¿Qué te gustaría hacer hoy?", [
+    { id:"action_cotizar",  title:"💼 Cotizar flete internacional" },
+    { id:"action_calcular", title:"🧮 Calcular costo de importación" }, // por ahora placeholder
+  ]);
+
+// Menú de modos (cuando elige Cotizar flete internacional)
+const sendModos = (to) =>
+  sendButtons(to, "Elegí el modo de transporte:", [
     { id:"menu_maritimo",  title:"🚢 Marítimo" },
     { id:"menu_aereo",     title:"✈️ Aéreo" },
     { id:"menu_terrestre", title:"🚚 Terrestre" },
@@ -387,13 +396,11 @@ app.post("/webhook", async (req,res)=>{
     const lower = norm(text);
     const btnId = (type==="interactive") ? (msg.interactive?.button_reply?.id || "") : "";
 
-    // Bienvenida (amena) — ORDEN: logo → pedir empresa → botones
+    // Bienvenida: logo → pedir empresa (NO muestra modos aquí)
     const showWelcomeOnce = async () => {
       if (s.welcomed) return;
       s.welcomed = true;
-
       await sendImage(from, LOGO_URL, "Conektar S.A. — Logística internacional");
-
       await sendText(
         from,
         "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
@@ -402,8 +409,6 @@ app.post("/webhook", async (req,res)=>{
       );
       s.step = "ask_empresa";
       s.askedEmpresa = true;
-
-      await sendModos(from);
     };
 
     // Palabras de arranque
@@ -413,23 +418,28 @@ app.post("/webhook", async (req,res)=>{
     }
     if (!s.welcomed) {
       await showWelcomeOnce();
-      if (type==="text" && text && !["hola","menu","inicio","start","volver"].includes(lower)) {
-        s.empresa = text;
-        await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
-      }
       return res.sendStatus(200);
     }
 
     /* ===== BOTONES ===== */
     if (type==="interactive") {
-      // Menú de modos
+
+      // Acciones principales
+      if (btnId==="action_cotizar"){
+        // Ir a elegir modo de transporte
+        s.step = "choose_modo";
+        await sendModos(from);
+        return res.sendStatus(200);
+      }
+      if (btnId==="action_calcular"){
+        await sendText(from, "🧮 El *calculador de costo de importación* estará disponible en breve. Mientras tanto, podés *cotizar tu flete internacional* desde el menú.");
+        await sendMainActions(from);
+        return res.sendStatus(200);
+      }
+
+      // Menú de modos (flujo ya existente)
       if (btnId.startsWith("menu_")){
         s.modo = btnId.replace("menu_","");
-        if (!s.empresa) {
-          s.step="ask_empresa";
-          if (!s.askedEmpresa){ await sendText(from,"Antes de seguir, decime el *nombre de tu empresa*."); s.askedEmpresa = true; }
-          return res.sendStatus(200);
-        }
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
         if (s.modo==="aereo"){
           s.step="aereo_subtipo";
@@ -466,7 +476,7 @@ app.post("/webhook", async (req,res)=>{
 
       // Resumen/confirmación
       if (btnId==="confirmar"){ s.step="cotizar"; }
-      if (btnId==="editar"){ await showWelcomeOnce(); s.step="ask_empresa"; return res.sendStatus(200); }
+      if (btnId==="editar"){ await sendMainActions(from); s.step="ask_empresa"; return res.sendStatus(200); }
       if (btnId==="cancelar"){ sessions.delete(from); await sendText(from,"Solicitud cancelada. ¡Gracias!"); return res.sendStatus(200); }
 
       // EXW / Despacho
@@ -478,15 +488,12 @@ app.post("/webhook", async (req,res)=>{
 
     /* ===== TEXTO ===== */
     if (type==="text") {
-      // Empresa
+      // Empresa (al responder mostramos recién aquí las acciones principales)
       if (s.step==="ask_empresa"){
         s.empresa = text;
         s.askedEmpresa = true;
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
-        // retomar según modo
-        if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
-        else if (s.modo==="aereo"){ s.step="aereo_subtipo"; await sendButtons(from,"✈️ *Aéreo:* ¿Qué necesitás cotizar?",[{id:"aer_carga",title:"Carga general"},{id:"aer_courier",title:"Courier"}]); }
-        else if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN."); }
+        await sendMainActions(from);
         return res.sendStatus(200);
       }
 
@@ -602,7 +609,7 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.5"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.6"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2.5 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.6 en http://localhost:${PORT}`));
