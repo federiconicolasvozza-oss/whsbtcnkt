@@ -1,5 +1,6 @@
-// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.2
+// index.js — Conektar S.A. • Bot de Cotizaciones (ESM) • v2.3
 // - Bienvenida con bandera `welcomed` (evita loop)
+// - Pide empresa una sola vez (bandera `askedEmpresa`)
 // - Menú principal + pedido de empresa en paralelo, sin resets
 // - Cotizadores: Aéreo (carga/courier), Marítimo (LCL/FCL), Terrestre (FTL)
 // - EXW y upsell despacho
@@ -273,7 +274,8 @@ const emptyState = () => ({
   terrestre_tipo:"FTL", origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
   peso_kg:null, vol_cbm:null, tarifa:null, moneda:"USD", validez_dias:VALIDEZ_DIAS,
   exw_dir:null, valor_mercaderia:null, tipo_mercaderia:null,
-  welcomed:false
+  welcomed:false,
+  askedEmpresa:false
 });
 function getS(id){ if(!sessions.has(id)) sessions.set(id,{step:"start", data:emptyState()}); return sessions.get(id); }
 
@@ -362,7 +364,8 @@ app.post("/webhook", async (req,res)=>{
         ]
       );
       await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
-      s.step = s.step || "ask_empresa";
+      s.step = "ask_empresa";
+      s.data.askedEmpresa = true;   // <- pedida una vez
     };
 
     // arranque/volver sin resetear
@@ -385,7 +388,14 @@ app.post("/webhook", async (req,res)=>{
       // Menú principal
       if (btnId.startsWith("menu_")) {
         s.data.modo = btnId.replace("menu_","");
-        if (!s.data.empresa) { s.step="ask_empresa"; await sendText(from,"Antes de seguir, decime el *nombre de tu empresa*."); return res.sendStatus(200); }
+        if (!s.data.empresa) {
+          s.step = "ask_empresa";
+          if (!s.data.askedEmpresa) {
+            await sendText(from, "Antes de seguir, decime el *nombre de tu empresa*.");
+            s.data.askedEmpresa = true;
+          }
+          return res.sendStatus(200);
+        }
 
         if (s.data.modo==="maritimo"){
           s.step="mar_tipo";
@@ -461,6 +471,8 @@ app.post("/webhook", async (req,res)=>{
       if (s.step==="ask_empresa"){
         s.data.empresa = text;
         await sendText(from, `Gracias. Empresa guardada: *${s.data.empresa}*`);
+        s.data.askedEmpresa = true;
+
         // si ya había modo elegido, retomar
         if (s.data.modo==="maritimo"){
           s.step="mar_tipo";
@@ -635,7 +647,7 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ====== HEALTH ====== */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.2"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador de Fletes ✅ v2.3"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
-app.listen(PORT, ()=> console.log(`🚀 Bot v2.2 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v2.3 en http://localhost:${PORT}`));
