@@ -680,6 +680,17 @@ app.post("/webhook", async (req,res)=>{
       }
 
       // Rating + volver
+      if (btnId==="exw_si"){
+        s.step = "exw_dir";
+        await sendText(from, "Perfecto, indicá la *dirección EXW* (empresa y domicilio).");
+        return res.sendStatus(200);
+      }
+      if (btnId==="exw_no"){
+        await sendText(from, "¡Gracias por la info!");
+        await askReturnMenu(from);
+        return res.sendStatus(200);
+      }
+
       if (/^menu_(si|no)$/.test(btnId)){
         if (btnId==="menu_si") await sendMainActions(from); else await sendText(from,"¡Gracias! Si necesitás algo más, escribinos cuando quieras.");
         return res.sendStatus(200);
@@ -714,6 +725,7 @@ app.post("/webhook", async (req,res)=>{
       if (s.step==="calc_peso"){ s.calc.kg = Math.max(0, toNum(text)||0); s.step="calc_modo_select"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"calc_modo_aer",title:"✈️ Aéreo"},{id:"calc_modo_mar",title:"🚢 Marítimo"}]); return res.sendStatus(200); }
       if (s.step==="calc_aer_origen"){ s.origen_aeropuerto = text; s.calc_modo="aereo"; s.step="calc_confirm"; await askResumenCalc(from, s); return res.sendStatus(200); }
       if (s.step==="calc_mar_origen"){ s.origen_puerto = text; s.calc_modo="maritimo"; s.step="calc_confirm"; await askResumenCalc(from, s); return res.sendStatus(200); }
+      if (s.step==="exw_dir"){ s.exw_dir = text; await sendText(from, `Dirección EXW recibida: *${s.exw_dir}*`); await askReturnMenu(from); s.step="main"; return res.sendStatus(200); }
     }
 
     /* ===== COTIZAR (ejecución) ===== */
