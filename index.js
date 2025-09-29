@@ -170,6 +170,12 @@ const sendContenedores = (to) =>
     { id:"mar_FCL40HC",title:"40' HC" },
   ]);
 
+const contenedorFromButton = (id) => ({
+  mar_FCL20: "20",
+  mar_FCL40: "40",
+  mar_FCL40HC: "40HC",
+}[id] || null);
+
 const askReturnMenu = (to) =>
   sendButtons(to, "¿Volvemos al menú?", [
     { id:"menu_si", title:"🔁 Sí, volver" },
@@ -646,7 +652,7 @@ app.post("/webhook", async (req,res)=>{
       if (btnId==="mar_LCL"){ s.maritimo_tipo = "LCL"; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
       if (btnId==="mar_FCL"){ s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from); return res.sendStatus(200); }
       if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
-        s.contenedor = btnId.replace("mar_FCL","20").replace("mar_FCL40HC","40HC").replace("mar_FCL40","40");
+        s.contenedor = contenedorFromButton(btnId);
         s.step="mar_origen";
         await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
         return res.sendStatus(200);
@@ -669,7 +675,7 @@ app.post("/webhook", async (req,res)=>{
       if (btnId==="calc_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="calc_mar_origen"; await sendText(from,"📍 *PUERTO ORIGEN* (ej.: Shanghai / Ningbo)"); return res.sendStatus(200); }
       if (btnId==="calc_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="calc_fcl_eq"; await sendContenedores(from); return res.sendStatus(200); }
       if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId) && s.step==="calc_fcl_eq"){
-        s.calc_contenedor = btnId==="mar_FCL20"?"20":"mar_FCL40HC"?"40HC":"40"; // fallback simple
+        s.calc_contenedor = contenedorFromButton(btnId);
         s.step="calc_mar_origen"; await sendText(from,"📍 *PUERTO ORIGEN* (ej.: Shanghai / Ningbo)"); return res.sendStatus(200);
       }
 
@@ -737,7 +743,7 @@ app.post("/webhook", async (req,res)=>{
             texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmt(wm)} (t vs m³)\nTarifa base: USD ${fmt(r.price)} por W/M\n*Total estimado:* USD ${fmt(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
           } else {
-            const modalidad = "FCL" + (s.contenedor||"");
+            const modalidad = s.contenedor ? `FCL ${s.contenedor}` : "FCL";
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
             if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*."); return res.sendStatus(200); }
             texto = `✅ *Tarifa estimada (Marítimo ${modalidad})*\nUSD ${fmt(r.totalUSD)} + *Gastos Locales*.\n*Origen:* ${s.origen_puerto}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
