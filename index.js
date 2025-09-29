@@ -1,7 +1,7 @@
 // index.js — Conektar S.A. • Bot Cotizaciones + Costeo Impo
-// v3.3 — tarifas de flete + matriz impositiva en mismo Sheet (Clasificación)
-//        bienvenida única, cierres + reseña, LCL W/M, árbol Clasificación completo
-//        Courier: PF/EMP + sin EXW, rating en logs, nuevo formato de Costeo
+// v3.4 — fixes: costeo FCL, Populares, selección por índice (evita recortes),
+//        Courier PF/EMP + sin EXW, rating en logs,
+//        Mensaje de costeo con separaciones y Notas en cursiva.
 
 import express from "express";
 import dotenv from "dotenv";
@@ -83,7 +83,6 @@ const toNum = s => {
   return m ? Number(m[0]) : NaN;
 };
 const fmt = n => isFinite(n) ? Number(n).toFixed(2) : "0.00";
-// USD con separador de miles
 const fmtUSD = n => isFinite(n)
   ? Number(n).toLocaleString("en-US",{minimumFractionDigits:2, maximumFractionDigits:2})
   : "0.00";
@@ -554,7 +553,8 @@ app.post("/webhook", async (req,res)=>{
       else if (btnId==="mar_FCL"){
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
       }
-      else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
+      else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId) && s.flow!=="calc"){
+        // SOLO en cotizador clásico
         s.contenedor = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
         s.step="mar_origen";
         await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
@@ -602,33 +602,56 @@ app.post("/webhook", async (req,res)=>{
         await sendList(from, "⭐ Productos más consultados:", listFrom(populares,"pop"), "Populares", "Ver");
         s.step="calc_pop_pick";
       }
-      // árbol picks
+      else if (/^pop_\d+$/.test(btnId) && s.step==="calc_pop_pick"){
+        const i = Number(btnId.split("_")[1]||0);
+        const elegido = populares[i] || populares[0];
+        const M = await getMatrix();
+        const V = indexMatrix(M);
+        const n3Matches = distinct(
+          V.filter(x => norm(x.niv3).includes(norm(elegido)) || norm(x.sub).includes(norm(elegido))),
+          x => x.niv3
+        ).filter(Boolean);
+        if (!n3Matches.length){
+          s.matriz = M[0]; s.producto_desc = elegido;
+          s.step="calc_fob_unit";
+          await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125.50).");
+        } else {
+          s._find = { V, n3Matches };
+          await sendList(from, "Elegí el *tipo* (NIVEL 3):", listFrom(n3Matches,"n3s"), "Tipos", "Elegir");
+          s.step = "calc_find_n3_pick";
+        }
+      }
+      // árbol picks — usar índice del id para evitar recorte del título
       else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n1 = label;
+        const i = Number(btnId.split("_")[1]||0);
+        const label = s._tree.n1[i];
+        s.sel_n1 = label || "";
         const V = s._tree.V;
         const n2 = distinct(V.filter(x=>x.niv1===label), x=>x.niv2).filter(Boolean);
         await sendList(from, "Elegí *NIVEL 2*:", listFrom(n2,"n2"), "Nivel 2", "Elegir");
         s._tree.n2 = n2; s.step="calc_n2_pick";
       }
       else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n2 = label;
+        const i = Number(btnId.split("_")[1]||0);
+        const label = s._tree.n2[i];
+        s.sel_n2 = label || "";
         const V = s._tree.V;
         const n3 = distinct(V.filter(x=>x.niv1===s.sel_n1 && x.niv2===label), x=>x.niv3).filter(Boolean);
         await sendList(from, "Elegí *NIVEL 3*:", listFrom(n3,"n3"), "Nivel 3", "Elegir");
         s._tree.n3 = n3; s.step="calc_n3_pick";
       }
       else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n3 = label;
+        const i = Number(btnId.split("_")[1]||0);
+        const label = s._tree.n3[i];
+        s.sel_n3 = label || "";
         const V = s._tree.V;
         const subs = distinct(V.filter(x=>x.niv1===s.sel_n1 && x.niv2===s.sel_n2 && x.niv3===label), x=>x.sub).filter(Boolean);
         await sendList(from, "Elegí la *Subcategoría*:", listFrom(subs,"sub"), "Subcategorías", "Elegir");
         s._tree.subs = subs; s.step="calc_sub_pick";
       }
       else if (/^sub_\d+$/.test(btnId) && s.step==="calc_sub_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
+        const i = Number(btnId.split("_")[1]||0);
+        const label = s._tree.subs[i];
         const M = await getMatrix();
         const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
         s.matriz = fila;
@@ -638,15 +661,17 @@ app.post("/webhook", async (req,res)=>{
       }
       // búsqueda libre picks
       else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
-        const title = msg.interactive?.list_reply?.title;
+        const i = Number(btnId.split("_")[1]||0);
+        const title = s._find.n3Matches[i];
         s.sel_n3 = title;
-        const V = s._find.V;
+        const { V } = s._find;
         const subs = distinct(V.filter(x=>x.niv3===title), x=>x.sub).filter(Boolean);
         await sendList(from, "Elegí la *subcategoría*:", listFrom(subs,"subf"), "Subcategorías", "Elegir");
         s._find.subs = subs; s.step="calc_find_sub_pick";
       }
       else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
-        const label = msg.interactive?.list_reply?.title;
+        const i = Number(btnId.split("_")[1]||0);
+        const label = s._find.subs[i];
         const M = await getMatrix();
         const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
         s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
@@ -666,17 +691,17 @@ app.post("/webhook", async (req,res)=>{
 
       else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
       else if (btnId==="calc_go"){
-        // calcular (igual que antes)
         const M = s.matriz || { di:0, iva:0.21, iva_ad:0, iibb:0.035, iigg:RATE_IIGG, internos:0, tasa_est:TASA_ESTATISTICA, nota:"" };
-        let fleteUSD = 0, fleteDetalle = "";
+        let fleteUSD = 0;
         try{
           if (s.calc_modo==="aereo"){
             const r = await cotizarAereo({ origen: s.origen_aeropuerto || "Shanghai", kg: s.peso_kg||0, vol: (s.vol_cbm||0)*167 });
-            if (r){ fleteUSD = r.totalUSD; fleteDetalle = `Flete (AÉREO): USD ${fmt(fleteUSD)}`; }
+            if (r){ fleteUSD = r.totalUSD; }
           } else if (s.calc_modo==="maritimo"){
             const modalidad = s.calc_maritimo_tipo==="FCL" ? (s.calc_contenedor?`FCL${s.calc_contenedor}`:"FCL") : "LCL";
-            const r = await cotizarMaritimo({ origen: s.origen_puerto || "Shanghai", modalidad, wm: Math.max((s.lcl_tn||0), (s.lcl_m3||0)) });
-            if (r){ fleteUSD = r.totalUSD; fleteDetalle = `Flete (MARÍTIMO ${modalidad}): USD ${fmt(fleteUSD)}`; }
+            const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
+            const r = await cotizarMaritimo({ origen: s.origen_puerto || "Shanghai", modalidad, wm });
+            if (r){ fleteUSD = r.totalUSD; }
           }
         }catch{}
 
@@ -703,14 +728,16 @@ app.post("/webhook", async (req,res)=>{
         const labelFlete =
           s.calc_modo==="aereo" ? "✈️ (Aéreo)" :
           s.calc_modo==="maritimo" ? (s.calc_maritimo_tipo==="FCL" ? "🚢 (Marítimo FCL)" : "🚢 (Marítimo LCL)") :
-          "Flete";
+          "";
 
-        const body = [
+        // ===== Mensaje con separaciones + Notas en cursiva =====
+        const lineas = [
           "📦 *Resultado estimado (FOB → CIF)*",
+          "",
           `FOB total: USD ${fmtUSD(s.fob_total)} (${unidades} u. × ${fmtUSD(fobUnit)})`,
-          `${fleteUSD>0 ? `Flete ${labelFlete}: USD ${fmtUSD(fleteUSD)}` : "Flete: *sin tarifa* (seguimos el cálculo y te contactamos)"}`,
+          labelFlete ? `Flete ${labelFlete}: USD ${fmtUSD(fleteUSD)}` : "Flete: *sin tarifa* (seguimos el cálculo y te contactamos)",
           `Seguro (${(INSURANCE_RATE*100).toFixed(1)}%): USD ${fmtUSD(insurance)}`,
-          `CIF: *USD ${fmtUSD(cif)}*`,
+          `CIF: USD ${fmtUSD(cif)}`,
           "",
           "🏛️ *Impuestos*",
           `DI (${((M.di||0)*100).toFixed(1)}%): USD ${fmtUSD(di)}`,
@@ -721,18 +748,18 @@ app.post("/webhook", async (req,res)=>{
           `IIGG (${((M.iigg??RATE_IIGG)*100).toFixed(1)}%): USD ${fmtUSD(iigg)}` + ((M.internos||0)>0?`\nInternos (${(M.internos*100).toFixed(1)}%): USD ${fmtUSD(internos)}`:""),
           "",
           `📊 *Total impuestos:* USD ${fmtUSD(impTotal)}`,
-          "",
           "💰 *Costo final (CIF + imp.)*",
-          `Costo aduanero: *USD ${fmtUSD(costoAdu)}*`,
+          `Costo aduanero: USD ${fmtUSD(costoAdu)}`,
+          "",
           `➡️ Costo unitario final: USD ${fmtUSD(unitarioFinal)}`,
           `📈 Incremento sobre FOB: +${fmt(incrementoPct)}%`,
           "",
           "📝 *Notas:*",
-          M.req ? `• ${M.req}` : null,
-          M.nota ? `• ${M.nota}` : null,
-          "• No contempla gastos locales (liberación, despachante, almacenaje, etc.)."
-        ].filter(Boolean).join("\n");
-        await sendText(from, body);
+          ...(M.req ? [`* _${M.req}_`] : []),
+          ...(M.nota ? [`* _${M.nota}_`] : []),
+          "* _No contempla gastos locales (liberación, despachante, almacenaje, etc.)._"
+        ];
+        await sendText(from, lineas.join("\n"));
 
         await logCalculo([
           new Date().toISOString(), from, s.empresa, (s.producto_desc||s.categoria||s.sel_n3||""), (s.matriz?.SUB||s.matriz?.NIV3||""),
@@ -744,14 +771,19 @@ app.post("/webhook", async (req,res)=>{
         await upsellDespacho(from); s.step="upsell";
       }
 
-      // rating + volver
+      // rating + volver (registrar en Sheet)
       else if (/^rate_[1-5]$/.test(btnId)){
-        const val = Number(btnId.replace("rate_",""));
-        await sendText(from,"¡Gracias por tu calificación! ⭐");
-        await logSolicitud([
-          new Date().toISOString(), from, "", s.empresa, "whatsapp",
-          "rating", "", "", "", "", "", "", `rating:${val}`
-        ]);
+        try{
+          const val = Number(btnId.replace("rate_",""));
+          await sendText(from,"¡Gracias por tu calificación! ⭐");
+          await logSolicitud([
+            new Date().toISOString(), from, "", s.empresa||"", "whatsapp",
+            "rating", "", "", "", "", "", "", `rating:${val}`
+          ]);
+        }catch(e){
+          console.error("❌ rating log error:", e?.message||e);
+        }
+        return res.sendStatus(200);
       }
 
       else if (btnId==="menu_si"){ await sendMainActions(from); }
@@ -939,11 +971,11 @@ USD ${fmt(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo Impo ✅ v3.3"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo Impo ✅ v3.4"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 /* ========= Start ========= */
-app.listen(PORT, ()=> console.log(`🚀 Bot v3.3 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v3.4 en http://localhost:${PORT}`));
 
 /* ========= Helpers de resumen ========= */
 function modoMayus(m) {
