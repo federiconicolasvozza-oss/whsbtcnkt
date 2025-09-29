@@ -464,6 +464,49 @@ const askResumenCalc = (to, d) =>
     { id:"calc_edit", title:"✏️ Editar" },
   ]);
 
+function resumenCotizar(d){
+  const lines = [];
+  lines.push("🧾 Revisá los datos para cotizar:");
+  const modo = d?.modo ? modoMayus(d.modo) : "-";
+
+  if (d.modo === "maritimo"){
+    const tipo = d.maritimo_tipo || "-";
+    const cont = d.maritimo_tipo === "FCL" && d.contenedor ? ` ${d.contenedor}` : "";
+    lines.push(`• Modo: *${modo}* • Tipo: *${tipo}${cont}*`);
+    lines.push(`• Puerto origen: *${d.origen_puerto || "-"}*`);
+    if (d.maritimo_tipo === "LCL"){
+      lines.push(`• Peso: *${fmt(d.peso_kg||0)} kg*  • Volumen: *${fmt(d.vol_cbm||0)} m³*`);
+    }
+  } else if (d.modo === "aereo"){
+    const tipo = d.aereo_tipo === "carga_general" ? "Carga general" :
+                 d.aereo_tipo === "courier" ? "Courier" : "-";
+    const tipoStr = tipo !== "-" ? ` • Tipo: *${tipo}*` : "";
+    lines.push(`• Modo: *${modo}*${tipoStr}`);
+    if (d.aereo_tipo === "carga_general"){
+      lines.push(`• Aeropuerto origen: *${d.origen_aeropuerto || "-"}*`);
+      lines.push(`• Peso: *${fmt(d.peso_kg||0)} kg*  • Peso volumétrico: *${fmt(d.vol_cbm||0)} kg*`);
+    } else if (d.aereo_tipo === "courier"){
+      lines.push(`• Origen: *${d.origen_aeropuerto || "-"}*`);
+      lines.push(`• Peso: *${fmt(d.peso_kg||0)} kg*`);
+    }
+  } else if (d.modo === "terrestre"){
+    lines.push(`• Modo: *${modo}*`);
+    lines.push(`• Origen: *${d.origen_direccion || "-"}*`);
+  } else {
+    lines.push(`• Modo: *${modo}*`);
+  }
+
+  lines.push("\n¿Confirmás para cotizar?");
+  return lines.join("\n");
+}
+
+const askResumenCotizar = (to, d) =>
+  sendButtons(to, resumenCotizar(d), [
+    { id:"confirmar", title:"✅ Confirmar" },
+    { id:"editar",    title:"✏️ Editar" },
+    { id:"cancelar",  title:"Cancelar" },
+  ]);
+
 /* ========= Motor de cálculo ========= */
 async function estimarFleteParaCalc({ modo, maritimo_tipo, contenedor, origen, kg, vol }) {
   try{
@@ -649,8 +692,8 @@ app.post("/webhook", async (req,res)=>{
         if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN."); }
         return res.sendStatus(200);
       }
-      if (btnId==="mar_LCL"){ s.maritimo_tipo = "LCL"; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
-      if (btnId==="mar_FCL"){ s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from); return res.sendStatus(200); }
+      if (btnId==="mar_LCL"){ s.maritimo_tipo = "LCL"; s.peso_kg=null; s.vol_cbm=null; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
+      if (btnId==="mar_FCL"){ s.maritimo_tipo = "FCL"; s.peso_kg=null; s.vol_cbm=null; s.step="mar_equipo"; await sendContenedores(from); return res.sendStatus(200); }
       if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
         s.contenedor = contenedorFromButton(btnId);
         s.step="mar_origen";
@@ -710,13 +753,15 @@ app.post("/webhook", async (req,res)=>{
       }
 
       // Cotizador clásico
-      if (s.step==="mar_origen"){ s.origen_puerto = text; await sendButtons(from, "¿Confirmás para cotizar?", [{id:"confirmar",title:"✅ Confirmar"},{id:"editar",title:"✏️ Editar"},{id:"cancelar",title:"Cancelar"}]); return res.sendStatus(200); }
+      if (s.step==="mar_origen"){ s.origen_puerto = text; if (s.maritimo_tipo === "LCL"){ s.step="mar_peso"; await sendText(from,"⚖️ *Peso total (kg)* (podés usar decimales)."); } else { await askResumenCotizar(from, s); } return res.sendStatus(200); }
+      if (s.step==="mar_peso"){ const peso = toNum(text); if (!isFinite(peso) || peso <= 0){ await sendText(from,"Ingresá un número válido (mayor a 0)."); return res.sendStatus(200); } s.peso_kg = peso; s.step="mar_vol"; await sendText(from,"📦 *Volumen total (m³)* (podés usar decimales)."); return res.sendStatus(200); }
+      if (s.step==="mar_vol"){ const vol = toNum(text); if (!isFinite(vol) || vol < 0){ await sendText(from,"Ingresá un número válido (0 o mayor)."); return res.sendStatus(200); } s.vol_cbm = Math.max(0, vol); await askResumenCotizar(from, s); return res.sendStatus(200); }
       if (s.step==="aer_origen"){ s.origen_aeropuerto = text; s.step="aer_peso"; await sendText(from,"⚖️ *Peso (kg)* (entero)."); return res.sendStatus(200); }
       if (s.step==="aer_peso"){ const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); } s.peso_kg = Math.max(0, Math.round(peso)); s.step="aer_vol"; await sendText(from,"📦 *Peso volumétrico (kg)* (poné 0 si no sabés)."); return res.sendStatus(200); }
-      if (s.step==="aer_vol"){ const vol = toNum(text); if (isNaN(vol)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); } s.vol_cbm = Math.max(0, vol); await sendButtons(from, "¿Confirmás para cotizar?", [{id:"confirmar",title:"✅ Confirmar"},{id:"editar",title:"✏️ Editar"},{id:"cancelar",title:"Cancelar"}]); return res.sendStatus(200); }
+      if (s.step==="aer_vol"){ const vol = toNum(text); if (isNaN(vol)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); } s.vol_cbm = Math.max(0, vol); await askResumenCotizar(from, s); return res.sendStatus(200); }
       if (s.step==="courier_origen"){ s.origen_aeropuerto = text; s.step="courier_peso"; await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales)."); return res.sendStatus(200); }
-      if (s.step==="courier_peso"){ const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); } s.peso_kg = peso; await sendButtons(from, "¿Confirmás para cotizar?", [{id:"confirmar",title:"✅ Confirmar"},{id:"editar",title:"✏️ Editar"},{id:"cancelar",title:"Cancelar"}]); return res.sendStatus(200); }
-      if (s.step==="ter_origen"){ s.origen_direccion = text; await sendButtons(from, "¿Confirmás para cotizar?", [{id:"confirmar",title:"✅ Confirmar"},{id:"editar",title:"✏️ Editar"},{id:"cancelar",title:"Cancelar"}]); return res.sendStatus(200); }
+      if (s.step==="courier_peso"){ const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); } s.peso_kg = peso; await askResumenCotizar(from, s); return res.sendStatus(200); }
+      if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumenCotizar(from, s); return res.sendStatus(200); }
 
       // === Calculadora (costeo) ===
       if (s.step==="calc_producto"){ s.calc.producto = text; s.step="calc_fob"; await sendText(from,"💵 Ingresá el *FOB total (USD)* (ej.: 12000)"); return res.sendStatus(200); }
