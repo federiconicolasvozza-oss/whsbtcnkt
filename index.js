@@ -1,8 +1,6 @@
 // index.js — Conektar S.A. • Bot Cotizaciones + Costeo Impo + Flete Local
-// v3.6 — Flete Local con pestaña propia (GOOGLE_TARIFFS_TAB_FLETE_LOCAL),
-//        costeo formateado (FOB→CIF) con notas en cursiva, Courier PF/EMP sin EXW,
-//        fix botón “apilable” (también entiende sí/no por texto), rating en logs,
-//        árbol/populares estables.
+// v3.7 — Flete Local con lista de distancias (sin error 131009), apilable removido,
+//        Terrestre FTL copy, ejemplos con coma, menú “🌍 Cotiz. Flete Intl”.
 
 import express from "express";
 import dotenv from "dotenv";
@@ -28,7 +26,7 @@ const TAB_MAR_HINT = (process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").t
 const TAB_TER_HINT = (process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
 const TAB_COU_HINT = (process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
 const TAB_CLASIF_HINT = (process.env.GOOGLE_TARIFFS_TAB_CLASIFICACION || "Clasificación").trim();
-/* NUEVO: pestaña específica para Flete Local */
+/* Pestaña específica para Flete Local */
 const TAB_LOCAL_HINT = (process.env.GOOGLE_TARIFFS_TAB_FLETE_LOCAL || "").trim();
 
 const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
@@ -147,7 +145,7 @@ const sendImage = (to, link, caption="") =>
 /* ---- Menús / rating / upsell ---- */
 const sendMainActions = (to) =>
   sendButtons(to, "¿Qué te gustaría hacer hoy?", [
-    { id:"action_cotizar",  title:"💼 Cotiz. Flete" },
+    { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
     { id:"action_calcular", title:"🧮 Costeo Impo" },
     { id:"action_local",    title:"🚚 Flete Local" },
   ]);
@@ -222,7 +220,6 @@ async function resolveTabTitle(sheetId, hint, extras = []) {
     const starts= entries.find(([k])=>k.startsWith(q)); if (starts) return starts[1];
     const incl  = entries.find(([k])=>k.includes(q));   if (incl) return incl[1];
   }
-  // si no hay hint, devolvemos cualquiera (pero acá preferimos fallar)
   if (!hint) throw new Error("No se indicó pestaña.");
   throw new Error(`No pude encontrar la pestaña "${hint}". Verificá nombre y permisos.`);
 }
@@ -403,11 +400,11 @@ const localTipoOptions = [
   { id:"lt_imo",   title:"IMO / Peligrosa",  key:"pelig" },
 ];
 const localDistLabels = [
-  { id:"ld_caba",  title:"CABA", key:"caba" },
-  { id:"ld_30",    title:"BS AS ≤ 30 km", key:"bs as hasta 30 km" },
-  { id:"ld_50",    title:"BS AS ≤ 50 km", key:"bs as hasta 50 km" },
-  { id:"ld_70",    title:"BS AS ≤ 70 km", key:"bs as hasta 70 km" },
-  { id:"ld_100",   title:"BS AS ≤ 100 km",key:"bs as hasta 100 km" },
+  { key:"caba",                title:"CABA" },
+  { key:"bs as hasta 30 km",   title:"BS AS ≤ 30 km" },
+  { key:"bs as hasta 50 km",   title:"BS AS ≤ 50 km" },
+  { key:"bs as hasta 70 km",   title:"BS AS ≤ 70 km" },
+  { key:"bs as hasta 100 km",  title:"BS AS ≤ 100 km" },
 ];
 
 async function cotizarLocal({ capacidad, tipoKey, distKey }) {
@@ -433,8 +430,8 @@ const emptyState = () => ({
   aereo_tipo:null, origen_aeropuerto:null, destino_aeropuerto:"Ezeiza (EZE)",
   courier_persona:null, terrestre_tipo:"FTL", origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
   peso_kg:null, vol_cbm:null, exw_dir:null,
-  // LCL extras
-  lcl_tn:null, lcl_m3:null, lcl_stackable:null,
+  // LCL extras (apilable eliminado)
+  lcl_tn:null, lcl_m3:null,
   // calculadora
   flow:null, producto_desc:null, categoria:null, matriz:null,
   fob_unit:null, cantidad:null, fob_total:null,
@@ -582,10 +579,14 @@ app.post("/webhook", async (req,res)=>{
       else if (["lt_seca","lt_refrig","lt_imo"].includes(btnId) && s.step==="local_tipo"){
         s.local_tipo = btnId==="lt_seca"?"seca":btnId==="lt_refrig"?"refrig":"pelig";
         s.step="local_dist";
-        await sendButtons(from,"Elegí la *distancia*:", localDistLabels.map(o=>({id:o.id,title:o.title})));
+        // Distancias por LISTA (evita límite de 3 botones)
+        const rows = localDistLabels.map((d,i)=>({ id:`lid_${i}`, title: d.title, description: d.key }));
+        await sendList(from, "Elegí la *distancia*:", rows, "Distancias", "Elegir");
       }
-      else if (localDistLabels.some(o=>o.id===btnId) && s.step==="local_dist"){
-        const distKey = localDistLabels.find(o=>o.id===btnId).key;
+      else if (/^lid_\d+$/.test(btnId) && s.step==="local_dist"){
+        const i = Number(btnId.split("_")[1]||0);
+        const distKey = localDistLabels[i]?.key;
+        if (!distKey){ await sendText(from,"No pude leer la distancia. Probá de nuevo."); return res.sendStatus(200); }
         s.local_dist = distKey;
         const r = await cotizarLocal({ capacidad: s.local_cap, tipoKey: s.local_tipo, distKey });
         if (!r){ await sendText(from,"❌ No encontré tarifa para esa combinación en *Flete Local*."); return res.sendStatus(200); }
@@ -617,11 +618,11 @@ app.post("/webhook", async (req,res)=>{
             { id:"aer_courier", title:"Courier" }
           ]);
         }
-        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN."); }
+        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL (Camión completo):* Indicá *ciudad*."); }
       }
       else if (btnId==="mar_LCL"){
         s.maritimo_tipo = "LCL";
-        s.step="lcl_tn"; await sendText(from,"⚖️ *Toneladas (t)* (ej.: 2.5).");
+        s.step="lcl_tn"; await sendText(from,"⚖️ *Toneladas (t)* (ej.: 2,5).");
       }
       else if (btnId==="mar_FCL"){
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
@@ -704,7 +705,7 @@ app.post("/webhook", async (req,res)=>{
         s.matriz = fila;
         s.categoria = label;
         s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125.50).");
+        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
       }
       else if (/^pop_\d+$/.test(btnId) && s.step==="calc_pop_pick"){
         const i = Number(btnId.split("_")[1]||0);
@@ -712,7 +713,7 @@ app.post("/webhook", async (req,res)=>{
         const M = await getMatrix();
         s.matriz = M.find(x => norm(x.SUB).includes(norm(s.producto_desc)) || norm(x.NIV3).includes(norm(s.producto_desc))) || M[0];
         s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125.50).");
+        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
       }
       else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
         const title = msg.interactive?.list_reply?.title;
@@ -728,7 +729,7 @@ app.post("/webhook", async (req,res)=>{
         const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
         s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
         s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125.50).");
+        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
       }
 
       // Modo transporte (calculadora)
@@ -863,27 +864,16 @@ app.post("/webhook", async (req,res)=>{
       }
       if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumen(from, s); return res.sendStatus(200); }
 
-      // LCL preguntas
+      // LCL preguntas (apilable quitado)
       if (s.step==="lcl_tn"){
         const n = toNum(text);
-        if(!isFinite(n)||n<0){await sendText(from,"Ingresá toneladas válidas (ej.: 2.5)"); return res.sendStatus(200);}
-        s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8.5)"); return res.sendStatus(200);
+        if(!isFinite(n)||n<0){await sendText(from,"Ingresá toneladas válidas (ej.: 2,5)"); return res.sendStatus(200);}
+        s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8,5)"); return res.sendStatus(200);
       }
       if (s.step==="lcl_m3"){
         const n = toNum(text);
-        if(!isFinite(n)||n<0){await sendText(from,"Ingresá m³ válidos (ej.: 8.5)"); return res.sendStatus(200);}
-        s.lcl_m3=n; s.step="lcl_stack"; await sendButtons(from,"¿La mercadería es *apilable*?",[{id:"stk_si",title:"Sí"},{id:"stk_no",title:"No"}]); return res.sendStatus(200);
-      }
-      // Fallback: user escribió "si/no" en vez de tocar el botón
-      if (s.step==="lcl_stack"){
-        const yes = ["si","sí","si.","sí.","s","y","yes"].includes(lower);
-        const no  = ["no","no.","n"].includes(lower);
-        if (yes || no){
-          s.lcl_stackable = yes;
-          s.step="mar_origen";
-          await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
-          return res.sendStatus(200);
-        }
+        if(!isFinite(n)||n<0){await sendText(from,"Ingresá m³ válidos (ej.: 8,5)"); return res.sendStatus(200);}
+        s.lcl_m3=n; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200);
       }
 
       if (s.step==="exw_dir"){ s.exw_dir = text; s.step="upsell"; await sendText(from,"¡Gracias! Tomamos la dirección EXW."); await upsellDespacho(from); return res.sendStatus(200); }
@@ -913,12 +903,12 @@ app.post("/webhook", async (req,res)=>{
           return res.sendStatus(200);
         }
         if (s.step==="calc_fob_unit"){
-          const n = toNum(text); if (!isFinite(n)||n<=0){ await sendText(from,"Ingresá un número válido (ej.: 125.50)."); return res.sendStatus(200); }
+          const n = toNum(text); if (!isFinite(n)||n<=0){ await sendText(from,"Ingresá un número válido (ej.: 125,50)."); return res.sendStatus(200); }
           s.fob_unit = n; s.step="calc_qty"; await sendText(from,"🔢 Ingresá la *cantidad* de unidades."); return res.sendStatus(200);
         }
         if (s.step==="calc_qty"){
           const q = Math.max(1, Math.round(toNum(text))); s.cantidad=q; s.fob_total=(s.fob_unit||0)*q;
-          s.step="calc_vol"; await sendText(from,"📦 Ingresá el *VOLUMEN total* en m³ (ej.: 8.5). Si no sabés, 0."); return res.sendStatus(200);
+          s.step="calc_vol"; await sendText(from,"📦 Ingresá el *VOLUMEN total* en m³ (ej.: 8,5). Si no sabés, 0."); return res.sendStatus(200);
         }
         if (s.step==="calc_vol"){
           s.vol_cbm = Math.max(0, toNum(text)||0); s.step="calc_peso";
@@ -978,7 +968,7 @@ Tarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M
 *Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
 
 *Validez:* ${VALIDEZ_DIAS} días
-*Apilable:* ${s.lcl_stackable===true?"Sí":s.lcl_stackable===false?"No":"(sin indicar)"}\n*Nota:* No incluye impuestos ni gastos locales.`;
+*Nota:* No incluye impuestos ni gastos locales.`;
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
           } else { // FCL
             const modalidad = "FCL" + (s.contenedor||"");
@@ -1032,11 +1022,11 @@ USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo Impo + Flete Local ✅ v3.6"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo Impo + Flete Local ✅ v3.7"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 /* ========= Start ========= */
-app.listen(PORT, ()=> console.log(`🚀 Bot v3.6 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> console.log(`🚀 Bot v3.7 en http://localhost:${PORT}`));
 
 /* ========= Helpers de resumen ========= */
 function modoMayus(m) {
@@ -1051,7 +1041,7 @@ function resumenTexto(d){
   if (d.modo==="maritimo"){
     if (d.maritimo_tipo==="LCL"){
       lines.push("• Tipo: *LCL*");
-      lines.push(`• W/M input: t=${fmt(d.lcl_tn||0)} • m³=${fmt(d.lcl_m3||0)} • Apilable=${d.lcl_stackable===true?"Sí":d.lcl_stackable===false?"No":"-"}`);
+      lines.push(`• W/M input: t=${fmt(d.lcl_tn||0)} • m³=${fmt(d.lcl_m3||0)}`);
     } else {
       lines.push(`• Tipo: *FCL* ${d.contenedor?`(Equipo: ${d.contenedor})`:""}`);
     }
@@ -1119,7 +1109,6 @@ async function cotizarCourier({ pais, kg }) {
   let exact = data.find(r => toNum(r[iPeso]) === wanted);
   let usado = wanted, ajustado = false;
   if (!exact) {
-    // si hay que redondear hacia arriba
     if (COURIER_ROUND_UP){
       const mayores = data
         .map(r => ({ r, p: toNum(r[iPeso]) }))
