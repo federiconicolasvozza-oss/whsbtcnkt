@@ -637,7 +637,7 @@ app.post("/webhook", async (req,res)=>{
 
       // Cotizador clásico (se mantiene igual)
       if (btnId.startsWith("menu_")){
-        s.modo = btnId.replace("menu_","{}");
+        s.modo = btnId.slice("menu_".length);
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
         if (s.modo==="aereo"){ s.step="aereo_subtipo"; await sendButtons(from, "✈️ *Aéreo:* ¿Qué necesitás cotizar?", [ { id:"aer_carga", title:"Carga gral." }, { id:"aer_courier", title:"Courier" } ] ); }
         if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL:* Indicá ciudad/país de ORIGEN."); }
