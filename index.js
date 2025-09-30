@@ -654,44 +654,41 @@ app.post("/webhook", async (req,res)=>{
         await sendList(from, "Elegí *Nivel 1: Industria*:", listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
         s._tree = { V, n1 }; s.step="calc_n1_pick";
       }
-      else if (btnId==="calc_pop"){
-        await sendList(from, "⭐ Productos más consultados:", listFrom(populares,"pop"), "Populares", "Ver");
-        s.step="calc_pop_pick";
-      }
-      // árbol picks
-      else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n1 = label;
-        const V = s._tree.V;
-        const n2 = distinct(V.filter(x=>x.niv1===label), x=>x.niv2).filter(Boolean);
-        await sendList(from, "Elegí *Nivel 2: Sector*:", listFrom(n2,"n2"), "Nivel 2: Sector", "Elegir");
-        s._tree.n2 = n2; s.step="calc_n2_pick";
-      }
-      else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n2 = label;
-        const V = s._tree.V;
-        const n3 = distinct(V.filter(x=>x.niv1===s.sel_n1 && x.niv2===label), x=>x.niv3).filter(Boolean);
-        await sendList(from, "Elegí *Nivel 3: Categoría*:", listFrom(n3,"n3"), "Nivel 3: Categoría", "Elegir");
-        s._tree.n3 = n3; s.step="calc_n3_pick";
-      }
-      else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        s.sel_n3 = label;
-        const V = s._tree.V;
-        const subs = distinct(V.filter(x=>x.niv1===s.sel_n1 && x.niv2===s.sel_n2 && x.niv3===label), x=>x.sub).filter(Boolean);
-        await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
-        s._tree.subs = subs; s.step="calc_sub_pick";
-      }
-      else if (/^sub_\d+$/.test(btnId) && s.step==="calc_sub_pick"){
-        const label = msg.interactive?.list_reply?.title || "";
-        const M = await getMatrix();
-        const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
-        s.matriz = fila;
-        s.categoria = label;
-        s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-      }
+     else if (btnId==="calc_pop"){
+  const M = await getMatrix();
+  const directMatches = [
+    M.find(x => norm(x.NIV2).includes("ferreteria")),
+    M.find(x => norm(x.NIV3).includes("herramienta")),
+    M.find(x => norm(x.SUB).includes("quimico")),
+    M.find(x => norm(x.NIV2).includes("maquinaria")),
+    M.find(x => norm(x.SUB).includes("vehiculo")),
+  ].filter(Boolean);
+  
+  if (!directMatches.length) {
+    await sendText(from, "No encontré productos populares. Usá 'Categoría' o 'Descripción'.");
+    return res.sendStatus(200);
+  }
+  
+  const opciones = directMatches.map((m,i) => ({
+    id: `pop_direct_${i}`,
+    title: clip24(m.SUB || m.NIV3),
+    description: `${m.NIV1} > ${m.NIV2}`
+  }));
+  
+  s._popMatches = directMatches;
+  await sendList(from, "⭐ Productos populares:", opciones, "Populares", "Elegir");
+  s.step = "calc_pop_direct_pick";
+}
+
+else if (/^pop_direct_\d+$/.test(btnId) && s.step==="calc_pop_direct_pick"){
+  const idx = parseInt(btnId.split("_")[2]);
+  const fila = s._popMatches[idx];
+  s.matriz = fila;
+  s.categoria = fila.SUB || fila.NIV3;
+  s.producto_desc = fila.SUB || fila.NIV3;
+  s.step = "calc_fob_unit";
+  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+}
       // búsqueda libre picks
       else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
         const title = msg.interactive?.list_reply?.title;
@@ -1169,6 +1166,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
