@@ -1033,6 +1033,11 @@ if (s.step==="c_mar_origen"){
       }
       return res.sendStatus(200);
     }
+  } catch (err) {
+    console.error("webhook error", err);
+    if (!res.headersSent) return res.sendStatus(500);
+  }
+});
 
 /* ========= HEALTH ========= */
 app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.0"));
