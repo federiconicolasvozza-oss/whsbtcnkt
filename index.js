@@ -966,6 +966,7 @@ if (s.step==="c_mar_origen"){
     }
 
     /* ===== COTIZAR (ejecución) ===== */
+/* ===== COTIZAR (ejecución) ===== */
     if (s.step==="cotizar"){
       try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
@@ -973,76 +974,45 @@ if (s.step==="c_mar_origen"){
           if (!r){ await sendText(from,"❌ No encontré esa ruta en *Aéreos*. Probá con ciudad o IATA (PVG, PEK, NRT)."); return res.sendStatus(200); }
           const unit = `USD ${fmtUSD(r.pricePerKg)} por KG (FOB)`;
           const min  = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
-          const resp = `✅ *Tarifa estimada (AÉREO – Carga general)*
-${unit} + *Gastos Locales*.${min}
-
-*Kilos facturables:* ${r.facturableKg}
-*Total estimado:* USD ${fmtUSD(r.totalUSD)}
-
-*Validez:* ${VALIDEZ_DIAS} días
-*Nota:* No incluye impuestos ni gastos locales.`;
+          const resp = `✅ *Tarifa estimada (AÉREO – Carga general)*\n${unit} + *Gastos Locales*.${min}\n\n*Kilos facturables:* ${r.facturableKg}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","aereo", s.origen_aeropuerto, r.destino, s.peso_kg||"", s.vol_cbm||"", "", r.totalUSD, `Aéreo ${s.origen_aeropuerto}→${r.destino}`]);
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
           if (!r){ await sendText(from,"❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
-          const resp = `✅ *Tarifa estimada (COURIER)*
-*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}
-*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}
-*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*
-
-*Validez:* ${VALIDEZ_DIAS} días
-*Nota:* No incluye impuestos ni gastos locales.`;
+          const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", r.totalUSD, `Courier ${s.origen_aeropuerto}`]);
-
-          // courier NO pide EXW → pedir email
           s.step = "ask_email";
           await sendText(from, "📧 ¿Deseás que te enviemos la cotización por correo?\nDejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
           return res.sendStatus(200);
         } else if (s.modo==="maritimo"){
           if (s.maritimo_tipo==="LCL"){
-            const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0)); // W/M
+            const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad: "LCL", wm });
             if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*. Revisá la pestaña."); return res.sendStatus(200); }
-            const texto = `✅ *Tarifa estimada (Marítimo LCL)*
-W/M: ${fmtUSD(wm)} (t vs m³)
-Tarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M
-*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
-
-*Validez:* ${VALIDEZ_DIAS} días
-*Nota:* No incluye impuestos ni gastos locales.`;
+            const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
-          } else { // FCL
+          } else {
             const modalidad = "FCL" + (s.contenedor||"");
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
             if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*."); return res.sendStatus(200); }
-            const texto = `✅ *Tarifa estimada (Marítimo ${modalidad})*
-USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
-*Origen:* ${s.origen_puerto}
-
-*Validez:* ${VALIDEZ_DIAS} días
-*Nota:* No incluye impuestos ni gastos locales.`;
+            const texto = `✅ *Tarifa estimada (Marítimo ${modalidad})*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n*Origen:* ${s.origen_puerto}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.origen_puerto}→${r.destino}`]);
           }
         } else if (s.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.origen_direccion || "" });
           if (!r){ await sendText(from,"❌ No encontré esa ruta en *Terrestres*."); return res.sendStatus(200); }
-          const resp = `✅ *Tarifa estimada (TERRESTRE FTL)*
-USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
-
-*Validez:* ${VALIDEZ_DIAS} días
-*Nota:* No incluye impuestos ni gastos locales.`;
+          const resp = `✅ *Tarifa estimada (TERRESTRE FTL)*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","terrestre", s.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.origen_direccion}→${r.destino}`]);
         }
 
         await sendText(from, "✅ *Tu consulta fue registrada.* Nuestro equipo te contactará a la brevedad.\n📧 comercial@conektarsa.com");
 
-        // EXW → Upsell → cierre (excepto courier)
         if (!(s.modo==="aereo" && s.aereo_tipo==="courier")){
           await sendButtons(from, "¿Tu carga es EXW?", [
             { id:"exw_si", title:"Sí" },
@@ -1050,19 +1020,12 @@ USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.
           ]);
           s.step="exw_q";
         }
-      }catch(e){
+      } catch(e) {
         console.error("cotizar error", e);
         await sendText(from,"⚠️ Hubo un problema al leer la planilla. Revisá nombres de pestañas y permisos.");
       }
       return res.sendStatus(200);
     }
-
-    return res.sendStatus(200);
-  }catch(e){
-    console.error("webhook error", e);
-    return res.sendStatus(200);
-  }
-});
 
 /* ========= HEALTH ========= */
 app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.0"));
@@ -1183,6 +1146,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
