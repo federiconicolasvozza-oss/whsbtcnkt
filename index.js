@@ -918,7 +918,14 @@ app.post("/webhook", async (req,res)=>{
       if (s.step==="exw_dir"){ s.exw_dir = text; s.step="upsell"; await sendText(from,"¡Gracias! Tomamos la dirección EXW."); await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","exw_dir", s.exw_dir, "", "", "", "", "", "Dirección EXW"]); await upsellDespacho(from); return res.sendStatus(200); }
 
       // Calculadora — búsqueda libre
-      if (s.flow==="calc"){
+if (s.flow==="calc"){
+  if (s.step==="c_mar_origen"){
+    s.origen_puerto = text;
+    s.step = "c_confirm";
+    await confirmCalc(from, s);
+    return res.sendStatus(200);
+  }
+}    // ← acá hoy solo hay *un* cierre
         if (s.step==="calc_desc_wait"){
           const query = text;
           const M = await getMatrix();
@@ -1146,6 +1153,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
