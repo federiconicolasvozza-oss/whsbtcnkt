@@ -606,19 +606,20 @@ app.post("/webhook", async (req,res)=>{
     s.step = "c_confirm";
     await confirmCalc(from, s);
   } else {
-    // Cotizador clásico
-    s.maritimo_tipo = "FCL";
-    s.contenedor = cont;
-    s.lcl_tn = null; 
-    s.lcl_m3 = null;
-    s.step = "mar_origen";
-    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+      // Cotizador clásico
+      s.maritimo_tipo = "FCL";
+      s.contenedor = cont;
+      s.lcl_tn = null; 
+      s.lcl_m3 = null;
+      s.step = "mar_origen";
+      await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+    }
   }
-      else if (btnId==="aer_carga" || btnId==="aer_courier"){
-        s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
-        if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
-        else { s.step="courier_pf"; await sendButtons(from,"Para *Courier*, ¿quién importa?",[{id:"pf","title":"👤 Persona Física"},{id:"emp","title":"🏢 Empresa"}]); }
-      }
+  else if (btnId==="aer_carga" || btnId==="aer_courier"){
+    s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
+    if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
+    else { s.step="courier_pf"; await sendButtons(from,"Para *Courier*, ¿quién importa?",[{id:"pf","title":"👤 Persona Física"},{id:"emp","title":"🏢 Empresa"}]); }
+  }
       else if (btnId==="pf" || btnId==="emp"){
         s.courier_pf = btnId==="pf" ? "PF" : "EMP";
         s.step="courier_origen"; await sendText(from,"🌍 *País/Ciudad ORIGEN* (ej.: España / China / USA).");
@@ -1177,6 +1178,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
