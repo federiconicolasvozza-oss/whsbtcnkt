@@ -967,7 +967,7 @@ if (s.step==="c_mar_origen"){
 
     /* ===== COTIZAR (ejecución) ===== */
     if (s.step==="cotizar"){
-      try{
+      try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
           if (!r){ await sendText(from,"❌ No encontré esa ruta en *Aéreos*. Probá con ciudad o IATA (PVG, PEK, NRT)."); return res.sendStatus(200); }
@@ -1183,6 +1183,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
