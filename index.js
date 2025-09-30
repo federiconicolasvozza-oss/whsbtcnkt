@@ -591,7 +591,7 @@ app.post("/webhook", async (req,res)=>{
       }
       else if (btnId==="mar_LCL"){
         s.maritimo_tipo = "LCL";
-        s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+        s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
       }
       else if (btnId==="mar_FCL"){
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
@@ -600,11 +600,11 @@ app.post("/webhook", async (req,res)=>{
   const cont = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
   
   if (s.flow === "calc") {
-    // Calculadora
-    s.calc_maritimo_tipo = "FCL";
-    s.calc_contenedor = cont;
-    s.step = "c_confirm";
-    await confirmCalc(from, s);
+  // Calculadora
+  s.calc_maritimo_tipo = "FCL";
+  s.calc_contenedor = cont;
+  s.step = "c_mar_origen";  // ✅ Nuevo paso
+  await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
   } else {
       // Cotizador clásico
       s.maritimo_tipo = "FCL";
@@ -612,7 +612,7 @@ app.post("/webhook", async (req,res)=>{
       s.lcl_tn = null; 
       s.lcl_m3 = null;
       s.step = "mar_origen";
-      await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+      await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
     }
   }
   else if (btnId==="aer_carga" || btnId==="aer_courier"){
@@ -713,7 +713,7 @@ app.post("/webhook", async (req,res)=>{
       // Modo de transporte (calculadora)
       else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
       else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_confirm"; await confirmCalc(from, s); }
-      else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_confirm"; await confirmCalc(from,s); }
+      else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo)."); }
       else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
       else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
       else if (btnId==="calc_go"){
@@ -957,7 +957,12 @@ app.post("/webhook", async (req,res)=>{
           s.peso_kg = Math.max(0, toNum(text)||0);
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
-      }
+if (s.step==="c_mar_origen"){
+  s.origen_puerto = text;
+  s.step = "c_confirm";
+  await confirmCalc(from, s);
+  return res.sendStatus(200);
+}
     }
 
     /* ===== COTIZAR (ejecución) ===== */
@@ -1178,6 +1183,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
