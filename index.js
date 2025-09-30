@@ -106,6 +106,10 @@ const fmtUSD = n => isFinite(n)
 const fmtARS = n => isFinite(n)
   ? Number(n).toLocaleString("es-AR",{minimumFractionDigits:2, maximumFractionDigits:2})
   : "0,00";
+// formato simple para números (ej: m³, kg)
+const fmt = (n) => isFinite(n)
+  ? Number(n).toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  : "0";
 
 const chargeable = (kg, volKg) => Math.max(Math.ceil(kg||0), Math.ceil(volKg||0));
 
@@ -1165,4 +1169,5 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
