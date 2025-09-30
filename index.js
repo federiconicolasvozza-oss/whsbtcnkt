@@ -785,20 +785,21 @@ app.post("/webhook", async (req,res)=>{
 
         // pedir email corporativo
         s.step = "ask_if_email";
-await sendButtons(from, "📧 ¿Deseás que te enviemos la cotización por correo?", [
-  { id:"email_si", title:"✅ Sí" },
-  { id:"email_no", title:"❌ No" }
-]);
-        else if (btnId==="email_si"){ 
-  s.step = "ask_email"; 
-  await sendText(from, "Dejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_"); 
-}
-else if (btnId==="email_no"){ 
-  await sendText(from,"¡Gracias! Nuestro equipo te contactará a la brevedad.");
-  await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","email_rechazado", "", "", "", "", "", "", "Usuario no desea recibir email"]);
-  await endFlow(from); 
-  sessions.delete(from);
-}
+        await sendButtons(from, "📧 ¿Deseás que te enviemos la cotización por correo?", [
+          { id:"email_si", title:"✅ Sí" },
+          { id:"email_no", title:"❌ No" }
+        ]);
+      }
+      else if (btnId==="email_si"){
+        s.step = "ask_email";
+        await sendText(from, "Dejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
+      }
+      else if (btnId==="email_no"){
+        await sendText(from,"¡Gracias! Nuestro equipo te contactará a la brevedad.");
+        await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","email_rechazado", "", "", "", "", "", "", "Usuario no desea recibir email"]);
+        await endFlow(from);
+        sessions.delete(from);
+      }
       // rating + volver
       else if (/^rate_[1-5]$/.test(btnId)){ 
         const val = Number(btnId.split("_")[1]);
