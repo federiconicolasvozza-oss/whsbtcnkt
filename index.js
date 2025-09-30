@@ -1116,8 +1116,8 @@ function confirmCalc(to, d){
   ]);
 }
 /* ========= Courier cotizador ========= */
-// ✅ Versión única de cotizarCourier (con COURIER_ROUND_UP opcional)
-async function cotizarCourier({ pais, kg }) {
+// ✅ ÚNICA DEFINICIÓN
+async function cotizarCourierTarifas({ pais, kg }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COU_HINT, "A1:Z10000", ["courier"]);
   if (!rows.length) throw new Error("Courier vacío");
 
@@ -1139,7 +1139,6 @@ async function cotizarCourier({ pais, kg }) {
   let usado = wanted, ajustado = false;
 
   if (!exact) {
-    // Si está habilitado, toma el primer escalón >= wanted
     if (typeof COURIER_ROUND_UP !== "undefined" && COURIER_ROUND_UP) {
       const mayores = data
         .map(r => ({ r, p: toNum(r[iPeso]) }))
@@ -1147,7 +1146,6 @@ async function cotizarCourier({ pais, kg }) {
         .sort((a, b) => a.p - b.p);
       if (mayores.length) { exact = mayores[0].r; usado = toNum(exact[iPeso]); ajustado = true; }
     }
-    // Fallback: escalón más cercano
     if (!exact) {
       let best = null, bestDiff = Infinity;
       for (const r of data) {
