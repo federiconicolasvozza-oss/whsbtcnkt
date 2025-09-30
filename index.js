@@ -597,10 +597,12 @@ app.post("/webhook", async (req,res)=>{
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
       }
       else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
-        s.contenedor = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
-        s.step="mar_origen";
-        await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
-      }
+  s.maritimo_tipo = "FCL";                 // ✅ <— esto faltaba
+  s.contenedor = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
+  s.lcl_tn = null; s.lcl_m3 = null;        // (opcional) limpia inputs de LCL
+  s.step="mar_origen";
+  await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+}
       else if (btnId==="aer_carga" || btnId==="aer_courier"){
         s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
         if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
@@ -701,10 +703,13 @@ app.post("/webhook", async (req,res)=>{
       else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_confirm"; await confirmCalc(from, s); }
       else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_confirm"; await confirmCalc(from,s); }
       else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
-      else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId) && s.flow==="calc"){
-        s.calc_contenedor = btnId==="mar_FCL20"?"20":btnId==="mar_FCL40"?"40":"40HC";
-        s.step="c_confirm"; await confirmCalc(from,s);
-      }
+      else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
+  s.maritimo_tipo = "FCL";                 // ✅ <— esto faltaba
+  s.contenedor = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
+  s.lcl_tn = null; s.lcl_m3 = null;        // (opcional) limpia inputs de LCL
+  s.step="mar_origen";
+  await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+}
 
       else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
       else if (btnId==="calc_go"){
@@ -1169,4 +1174,5 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
