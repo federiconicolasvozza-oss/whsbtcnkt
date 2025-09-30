@@ -806,7 +806,8 @@ $ ${fmtARS(r.totalARS)} ARS
       }
 
       // ===== Calculadora (árbol + búsqueda)
-      else if (btnId==="calc_desc"){ s.step="calc_desc_wait"; await sendText(from,"Escribí una *breve descripción* (p.ej., "químicos", "memorias RAM")."); }
+      else if (btnId==="calc_desc"){ s.step="calc_desc_wait"; await sendText(from,"Escribí una *breve descripción* (p.ej., \"químicos\", \"memorias RAM\").");
+ }
       else if (btnId==="calc_cat"){
         const M = await getMatrix(); const V = indexMatrix(M);
         const n1 = distinct(V, x=>x.niv1).filter(Boolean);
@@ -1263,3 +1264,4 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
