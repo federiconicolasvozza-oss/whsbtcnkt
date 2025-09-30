@@ -1115,38 +1115,55 @@ function confirmCalc(to, d){
     { id:"calc_edit", title:"✏️ Editar" },
   ]);
 }
-
 /* ========= Courier cotizador ========= */
+// ✅ Versión única de cotizarCourier (con COURIER_ROUND_UP opcional)
 async function cotizarCourier({ pais, kg }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COU_HINT, "A1:Z10000", ["courier"]);
   if (!rows.length) throw new Error("Courier vacío");
+
   const header = rows[0], data = rows.slice(1);
-  const iPeso = headerIndex(header,"peso","peso (kg)");
-  const iAS   = headerIndex(header,"america sur");
-  const iUS   = headerIndex(header,"usa","usa & canada","usa & canadá");
-  const iEU   = headerIndex(header,"europa");
-  const iASIA = headerIndex(header,"asia");
+  const iPeso = headerIndex(header, "peso", "peso (kg)");
+  const iAS   = headerIndex(header, "america sur");
+  const iUS   = headerIndex(header, "usa", "usa & canada", "usa & canadá");
+  const iEU   = headerIndex(header, "europa");
+  const iASIA = headerIndex(header, "asia");
 
   const region = COUNTRY_TO_REGION[norm(pais)] || "europa";
-  const col = region === "america sur" ? iAS : region === "usa & canadá" ? iUS : region === "asia" ? iASIA : iEU;
+  const col = region === "america sur" ? iAS
+            : region === "usa & canadá" ? iUS
+            : region === "asia" ? iASIA
+            : iEU;
 
   const wanted = Number(kg);
   let exact = data.find(r => toNum(r[iPeso]) === wanted);
   let usado = wanted, ajustado = false;
+
   if (!exact) {
-    if (COURIER_ROUND_UP){
+    // Si está habilitado, toma el primer escalón >= wanted
+    if (typeof COURIER_ROUND_UP !== "undefined" && COURIER_ROUND_UP) {
       const mayores = data
         .map(r => ({ r, p: toNum(r[iPeso]) }))
-        .filter(x => x.p >= wanted)
-        .sort((a,b)=>a.p-b.p);
-      if (mayores.length){ exact = mayores[0].r; usado = toNum(exact[iPeso]); ajustado = true; }
+        .filter(x => isFinite(x.p) && x.p >= wanted)
+        .sort((a, b) => a.p - b.p);
+      if (mayores.length) { exact = mayores[0].r; usado = toNum(exact[iPeso]); ajustado = true; }
     }
-    if (!exact){
-      let best=null, bestDiff=Infinity;
-      for (const r of data) { const p=toNum(r[iPeso]); const d=Math.abs(p-wanted); if (d<bestDiff){best=r;bestDiff=d;} }
-      exact = best; usado = toNum(best[iPeso]); ajustado = true;
+    // Fallback: escalón más cercano
+    if (!exact) {
+      let best = null, bestDiff = Infinity;
+      for (const r of data) {
+        const p = toNum(r[iPeso]); if (!isFinite(p)) continue;
+        const d = Math.abs(p - wanted);
+        if (d < bestDiff) { best = r; bestDiff = d; }
+      }
+      exact = best; usado = toNum(best?.[iPeso]); ajustado = true;
     }
   }
-  return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Ezeiza (EZE)" };
-}
 
+  return {
+    region,
+    escalonKg: usado,
+    ajustado,
+    totalUSD: toNum(exact?.[col]),
+    destino: "Ezeiza (EZE)"
+  };
+}
