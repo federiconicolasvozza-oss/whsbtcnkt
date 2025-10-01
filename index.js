@@ -765,10 +765,32 @@ else if (btnId === "calc_pop") {
     title: clip24(m.SUB || m.NIV3),
     description: `${m.NIV1} > ${m.NIV2}`
   }));
-  
+
   s._popMatches = directMatches;
   await sendList(from, "⭐ Productos populares:", opciones, "Populares", "Elegir");
   s.step = "calc_pop_direct_pick";
+}
+else if (/^pop_direct_\d+$/.test(btnId) && s.step === "calc_pop_direct_pick") {
+  const index = Number(btnId.split("_").pop());
+  const fila = Array.isArray(s._popMatches) ? s._popMatches[index] : undefined;
+
+  if (!fila) {
+    await sendText(from, "⚠️ No encontré datos para este producto. Escribí 'menu' para volver.");
+    s.step = "start";
+    return res.sendStatus(200);
+  }
+
+  const categoria = fila.SUB || fila.NIV3 || fila.NIV2 || "";
+  const descripcion = (fila.NIV3 && fila.SUB)
+    ? `${fila.NIV3} / ${fila.SUB}`
+    : categoria;
+  s.matriz = fila;
+  s.categoria = categoria;
+  s.producto_desc = descripcion;
+
+  s.step = "calc_fob_unit";
+  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+  return res.sendStatus(200);
 }
 // búsqueda libre picks
 else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
