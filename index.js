@@ -578,6 +578,7 @@ app.post("/webhook", async (req,res)=>{
       else if (btnId==="action_calcular"){ s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from); }
       else if (btnId==="action_local"){ s.flow="local"; s.step="local_cap";
         const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
+        s._localCaps = caps;
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
       }
 
@@ -944,7 +945,10 @@ else if (btnId==="calc_go"){
 
       // === Flete Local ===
       else if (/^cap_\d+$/.test(btnId) && s.flow==="local" && s.step==="local_cap"){
-        s.local_cap = msg.interactive?.list_reply?.title || "";
+        const label = msg.interactive?.list_reply?.title || "";
+        const idx = Number(btnId.split("_")[1]);
+        const caps = Array.isArray(s._localCaps) ? s._localCaps : [];
+        s.local_cap = caps?.[idx] || label;
         s.step="local_tipo";
         await sendButtons(from, "Tipo de carga:", [
           { id:"lt_seca",  title:"Carga Seca" },
