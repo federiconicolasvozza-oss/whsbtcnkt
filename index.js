@@ -173,12 +173,17 @@ const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
 /* ---- Menús / rating / upsell ---- */
-const sendMainActions = (to) =>
-  sendButtons(to, "¿Qué te gustaría hacer hoy?", [
+const sendMainActions = async (to) => {
+  await sendText(
+    to,
+    "Soy el bot de cotizaciones y costeo de Conektar. Puedo ayudarte con fletes internacionales, costos de importación y flete local. Escribí \"menu\" en cualquier momento para reiniciar."
+  );
+  return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
     { id:"action_calcular", title:"🧮 Costeo Impo" },
     { id:"action_local",    title:"🚚 Flete Local" },
   ]);
+};
 
 const askReturnMenu = (to) =>
   sendButtons(to, "¿Volvemos al menú?", [
