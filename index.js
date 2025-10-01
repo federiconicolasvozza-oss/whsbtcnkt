@@ -765,16 +765,6 @@ else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
   await sendList(from, "⭐ Productos populares:", opciones, "Populares", "Elegir");
   s.step = "calc_pop_direct_pick";
 }
-
-else if (/^pop_direct_\d+$/.test(btnId) && s.step==="calc_pop_direct_pick"){
-  const idx = parseInt(btnId.split("_")[2]);
-  const fila = s._popMatches[idx];
-  s.matriz = fila;
-  s.categoria = fila.SUB || fila.NIV3;
-  s.producto_desc = fila.SUB || fila.NIV3;
-  s.step = "calc_fob_unit";
-  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-}
       // búsqueda libre picks
       else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
         const title = msg.interactive?.list_reply?.title;
@@ -1253,6 +1243,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
