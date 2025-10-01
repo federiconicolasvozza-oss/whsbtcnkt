@@ -718,7 +718,7 @@ else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
   s._tree.n3 = n3; 
   s.step="calc_n3_pick";
 }
-else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
+else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){ 
   const label = msg.interactive?.list_reply?.title || "";
   s.sel_n3 = label;
   const V = s._tree.V;
@@ -742,8 +742,40 @@ else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
   }
   
   await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
-  s._tree.subs = subs; 
+  s._tree.subs = subs;
   s.step="calc_sub_pick";
+}
+else if (/^sub_\d+$/.test(btnId) && s.step === "calc_sub_pick") {
+  const label = msg.interactive?.list_reply?.title || "";
+  const clipSel = clip24(label);
+  const clipN1 = clip24(s.sel_n1 || "");
+  const clipN2 = clip24(s.sel_n2 || "");
+  const clipN3 = clip24(s.sel_n3 || "");
+
+  const M = await getMatrix();
+  const fila = M.find(row => {
+    const subMatch = clip24(row.SUB || "") === clipSel;
+    const n1Match = clip24(row.NIV1 || "") === clipN1;
+    const n2Match = clip24(row.NIV2 || "") === clipN2;
+    const n3Match = clip24(row.NIV3 || "") === clipN3;
+    return subMatch && n1Match && n2Match && n3Match;
+  });
+
+  if (!fila) {
+    await sendText(from, "⚠️ No encontré datos para este producto. Escribí 'menu' para volver.");
+    s.step = "start";
+    return res.sendStatus(200);
+  }
+
+  const categoria = fila.SUB || fila.NIV3 || label;
+  const descParts = [s.sel_n3 || fila.NIV3, label || categoria].filter(Boolean);
+  s.matriz = fila;
+  s.categoria = categoria;
+  s.producto_desc = descParts.join(" / ") || categoria;
+
+  s.step = "calc_fob_unit";
+  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+  return res.sendStatus(200);
 }
 else if (btnId === "calc_pop") {
   const M = await getMatrix();
