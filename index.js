@@ -666,8 +666,7 @@ app.post("/webhook", async (req,res)=>{
   await sendList(from, "Elegí *Nivel 1: Industria*:", listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
   s._tree = { V, n1 }; 
   s.step="calc_n1_pick";
-}
-else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
+} else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
   const label = msg.interactive?.list_reply?.title || "";
   s.sel_n1 = label;
   const V = s._tree.V;
@@ -691,8 +690,7 @@ else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
   await sendList(from, "Elegí *Nivel 2: Sector*:", listFrom(n2,"n2"), "Nivel 2: Sector", "Elegir");
   s._tree.n2 = n2; 
   s.step="calc_n2_pick";
-}
-else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
+} else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
   const label = msg.interactive?.list_reply?.title || "";
   s.sel_n2 = label;
   const V = s._tree.V;
@@ -717,8 +715,7 @@ else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
   await sendList(from, "Elegí *Nivel 3: Categoría*:", listFrom(n3,"n3"), "Nivel 3: Categoría", "Elegir");
   s._tree.n3 = n3; 
   s.step="calc_n3_pick";
-}
-else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
+} else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
   const label = msg.interactive?.list_reply?.title || "";
   s.sel_n3 = label;
   const V = s._tree.V;
@@ -744,8 +741,22 @@ else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
   await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
   s._tree.subs = subs; 
   s.step="calc_sub_pick";
-}
-{
+} else if (/^sub_\d+$/.test(btnId) && s.step==="calc_sub_pick"){
+  const label = msg.interactive?.list_reply?.title || "";
+  const M = await getMatrix();
+  const fila = M.find(x =>
+    clip24(x.SUB) === clip24(label) &&
+    norm(x.NIV2) === norm(s.sel_n2) &&
+    norm(x.NIV3) === norm(s.sel_n3) &&
+    (norm(x.NIV1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.NIV1)))
+  ) || M.find(x => clip24(x.SUB) === clip24(label)) || M[0];
+
+  s.matriz = fila;
+  s.categoria = label;
+  s.producto_desc = `${s.sel_n3} / ${label}`;
+  s.step="calc_fob_unit";
+  await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+} else if (btnId === "calc_pop") {
   const M = await getMatrix();
   const directMatches = [
     M.find(x => norm(x.NIV2).includes("ferreteria")),
@@ -769,32 +780,30 @@ else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
   s._popMatches = directMatches;
   await sendList(from, "⭐ Productos populares:", opciones, "Populares", "Elegir");
   s.step = "calc_pop_direct_pick";
+  // búsqueda libre picks
+} else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
+  const title = msg.interactive?.list_reply?.title;
+  s.sel_n3 = title;
+  const { V } = s._find;
+  const subs = distinct(V.filter(x=>x.niv3===title), x=>x.sub).filter(Boolean);
+  await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"subf"), "Nivel 4: Producto", "Elegir");
+  s._find.subs = subs; s.step="calc_find_sub_pick";
+} else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
+  const label = msg.interactive?.list_reply?.title;
+  const M = await getMatrix();
+  const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
+  s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
+  s.step="calc_fob_unit";
+  await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
 }
-      // búsqueda libre picks
-      else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
-        const title = msg.interactive?.list_reply?.title;
-        s.sel_n3 = title;
-        const { V } = s._find;
-        const subs = distinct(V.filter(x=>x.niv3===title), x=>x.sub).filter(Boolean);
-        await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"subf"), "Nivel 4: Producto", "Elegir");
-        s._find.subs = subs; s.step="calc_find_sub_pick";
-      }
-      else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
-        const label = msg.interactive?.list_reply?.title;
-        const M = await getMatrix();
-        const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
-        s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
-        s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-      }
 
-      // Modo de transporte (calculadora)
-      else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
-      else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_confirm"; await confirmCalc(from, s); }
-      else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo)."); }
-      else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
-      else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
-      else if (btnId==="calc_go"){
+// Modo de transporte (calculadora)
+else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
+else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_confirm"; await confirmCalc(from, s); }
+else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo)."); }
+else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
+else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
+else if (btnId==="calc_go"){
         // === calcular CIF+impuestos
         const M = s.matriz || { di:0, iva:0.21, iva_ad:0, iibb:0.035, iigg:RATE_IIGG, internos:0, tasa_est:TASA_ESTATISTICA, nota:"" };
         let fleteUSD = 0, fleteDetalle = "";
