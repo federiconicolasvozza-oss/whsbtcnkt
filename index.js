@@ -545,7 +545,7 @@ app.post("/webhook", async (req,res)=>{
         from,
         LOGO_URL,
         "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
-        "Acá vas a poder *cotizar fletes internacionales*, *estimaciones CIF* y *flete local*."
+        "Acá vas a poder *cotizar fletes internacionales*, *estimaciones de importación* y *fletes locales*."
       );
       await sleep(400);
       if (!s.askedEmpresa) {
@@ -587,7 +587,7 @@ app.post("/webhook", async (req,res)=>{
             { id:"aer_courier", title:"Courier" }
           ]);
         }
-        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre FTL (Camión completo):* Indicá ciudad."); }
+        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre Full (Camión completo):* Indicá ciudad."); }
       }
       else if (btnId==="mar_LCL"){
         s.maritimo_tipo = "LCL";
@@ -1167,6 +1167,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
