@@ -572,7 +572,7 @@ app.post("/webhook", async (req,res)=>{
       if (btnId==="action_cotizar"){ s.flow=null; s.step="choose_modo"; await sendModos(from); }
       else if (btnId==="action_calcular"){ s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from); }
       else if (btnId==="action_local"){ s.flow="local"; s.step="local_cap";
-        const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","1x20","1x40","1x40 Jumbo"];
+        const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
       }
 
@@ -1167,6 +1167,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
