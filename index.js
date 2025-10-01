@@ -648,13 +648,99 @@ app.post("/webhook", async (req,res)=>{
 
       // ===== Calculadora (árbol + búsqueda)
       else if (btnId==="calc_desc"){ s.step="calc_desc_wait"; await sendText(from,"Escribí una *breve descripción* (p.ej., “químicos”, “memorias RAM”)."); }
-      else if (btnId==="calc_cat"){
-        const M = await getMatrix(); const V = indexMatrix(M);
-        const n1 = distinct(V, x=>x.niv1).filter(Boolean);
-        await sendList(from, "Elegí *Nivel 1: Industria*:", listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
-        s._tree = { V, n1 }; s.step="calc_n1_pick";
-      }
-     else if (btnId==="calc_pop"){
+     else if (btnId==="calc_cat"){
+  const M = await getMatrix(); 
+  const V = indexMatrix(M);
+  const n1Raw = V.filter(x => x.niv1).map(x => x.niv1);
+  const n1 = [...new Set(n1Raw)].filter(Boolean);
+  console.log("DEBUG N1 encontrados:", n1.length, n1);
+  if (!n1.length) {
+    await sendText(from, "⚠️ No encontré industrias. Usá 'Descripción'.");
+    return res.sendStatus(200);
+  }
+  await sendList(from, "Elegí *Nivel 1: Industria*:", listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
+  s._tree = { V, n1 }; 
+  s.step="calc_n1_pick";
+}
+else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
+  const label = msg.interactive?.list_reply?.title || "";
+  s.sel_n1 = label;
+  const V = s._tree.V;
+  
+  const n2Raw = V.filter(x => {
+    const n1Match = norm(x.niv1).includes(norm(label)) || norm(label).includes(norm(x.niv1));
+    return n1Match && x.niv2;
+  }).map(x => x.niv2);
+  
+  const n2 = [...new Set(n2Raw)].filter(Boolean);
+  
+  console.log("DEBUG N1 seleccionado:", label);
+  console.log("DEBUG N2 encontrados:", n2.length, n2);
+  
+  if (!n2.length) {
+    await sendText(from, "⚠️ No encontré sectores para esta industria. Probá con 'Descripción' o escribí 'menu'.");
+    s.step = "start";
+    return res.sendStatus(200);
+  }
+  
+  await sendList(from, "Elegí *Nivel 2: Sector*:", listFrom(n2,"n2"), "Nivel 2: Sector", "Elegir");
+  s._tree.n2 = n2; 
+  s.step="calc_n2_pick";
+}
+else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
+  const label = msg.interactive?.list_reply?.title || "";
+  s.sel_n2 = label;
+  const V = s._tree.V;
+  
+  const n3Raw = V.filter(x => {
+    const n1Match = norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1));
+    const n2Match = norm(x.niv2) === norm(label);
+    return n1Match && n2Match && x.niv3;
+  }).map(x => x.niv3);
+  
+  const n3 = [...new Set(n3Raw)].filter(Boolean);
+  
+  console.log("DEBUG N2 seleccionado:", label);
+  console.log("DEBUG N3 encontrados:", n3.length, n3);
+  
+  if (!n3.length) {
+    await sendText(from, "⚠️ No encontré categorías para este sector. Escribí 'menu' para volver.");
+    s.step = "start";
+    return res.sendStatus(200);
+  }
+  
+  await sendList(from, "Elegí *Nivel 3: Categoría*:", listFrom(n3,"n3"), "Nivel 3: Categoría", "Elegir");
+  s._tree.n3 = n3; 
+  s.step="calc_n3_pick";
+}
+else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
+  const label = msg.interactive?.list_reply?.title || "";
+  s.sel_n3 = label;
+  const V = s._tree.V;
+  
+  const subsRaw = V.filter(x => {
+    const n1Match = norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1));
+    const n2Match = norm(x.niv2) === norm(s.sel_n2);
+    const n3Match = norm(x.niv3) === norm(label);
+    return n1Match && n2Match && n3Match && x.sub;
+  }).map(x => x.sub);
+  
+  const subs = [...new Set(subsRaw)].filter(Boolean);
+  
+  console.log("DEBUG N3 seleccionado:", label);
+  console.log("DEBUG Subcategorías encontradas:", subs.length, subs);
+  
+  if (!subs.length) {
+    await sendText(from, "⚠️ No encontré productos para esta categoría. Escribí 'menu' para volver.");
+    s.step = "start";
+    return res.sendStatus(200);
+  }
+  
+  await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
+  s._tree.subs = subs; 
+  s.step="calc_sub_pick";
+}
+{
   const M = await getMatrix();
   const directMatches = [
     M.find(x => norm(x.NIV2).includes("ferreteria")),
@@ -1167,6 +1253,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
