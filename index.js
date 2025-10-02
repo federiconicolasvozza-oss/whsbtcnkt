@@ -173,11 +173,20 @@ const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
 /* ---- Menús / rating / upsell ---- */
+const WELCOME_TEXT =
+  "🤖 *Soy tu Asistente Logístico Virtual*\n\n" +
+  "Todos dicen que *odian los bots*... pero este vas a *amarlo* ❤️.\n\n" +
+  "Soy el *primer bot de Comex hecho para simplificarte la vida*:\n" +
+  "• **Cotizá fletes internacionales** (✈️ 🚢 🚚)\n" +
+  "• **Simulá impuestos y costos de importación** (FOB → CIF + tributos)\n" +
+  "• **Calculá tarifas de transporte local** en $ ARS\n\n" +
+  "⚡ **Mi objetivo:** darte información clara en *segundos* y ahorrarte tiempo en tus decisiones logísticas.\n\n" +
+  "📌 *Disclaimer:* este servicio es **orientativo** y no reemplaza la confirmación formal de nuestro equipo.\n\n" +
+  "🌐 Más info en: www.conektarsa.com\n\n" +
+  "🔄 Recordá: en cualquier momento escribí *menu* o *reset* para iniciar nuevamente.";
+
 const sendMainActions = async (to) => {
-  await sendText(
-    to,
-    "Soy el bot de cotizaciones y costeo de Conektar. Puedo ayudarte con fletes internacionales, costos de importación y flete local. Escribí \"menu\" en cualquier momento para reiniciar."
-  );
+  await sendText(to, WELCOME_TEXT);
   return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
     { id:"action_calcular", title:"🧮 Costeo Impo" },
@@ -546,12 +555,8 @@ app.post("/webhook", async (req,res)=>{
     const showWelcomeOnce = async () => {
       if (s.welcomed) return;
       s.welcomed = true;
-      await sendImage(
-        from,
-        LOGO_URL,
-        "¡Bienvenido/a al *Asistente Virtual de Conektar*! 🙌\n" +
-        "Acá vas a poder *cotizar fletes internacionales*, *estimaciones de importación* y *fletes locales*."
-      );
+      await sendImage(from, LOGO_URL, "");
+      await sendText(from, WELCOME_TEXT);
       await sleep(400);
       if (!s.askedEmpresa) {
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
@@ -564,8 +569,8 @@ app.post("/webhook", async (req,res)=>{
     if (!s.welcomed) { await showWelcomeOnce(); return res.sendStatus(200); }
 
     // Comandos globales
-    if (type==="text" && ["menu","inicio","start","volver"].includes(lower)) {
-      if (lower==="inicio") { sessions.delete(from); getS(from); }
+    if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
+      if (lower==="inicio" || lower==="reset") { sessions.delete(from); getS(from); }
       await sendMainActions(from);
       return res.sendStatus(200);
     }
