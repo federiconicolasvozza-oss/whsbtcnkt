@@ -559,6 +559,8 @@ app.post("/webhook", async (req,res)=>{
       await sleep(400);
       await sendText(from, WELCOME_TEXT);
       await sleep(450);
+      await sendText(from, WELCOME_TEXT);
+      await sleep(400);
       if (!s.askedEmpresa) {
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
         s.step = "ask_empresa";
