@@ -556,6 +556,9 @@ app.post("/webhook", async (req,res)=>{
       if (s.welcomed) return;
       s.welcomed = true;
       await sendImage(from, LOGO_URL, "");
+      await sleep(400);
+      await sendText(from, WELCOME_TEXT);
+      await sleep(450);
       await sendText(from, WELCOME_TEXT);
       await sleep(400);
       if (!s.askedEmpresa) {
