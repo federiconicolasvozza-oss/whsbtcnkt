@@ -1817,7 +1817,7 @@ if (s.step==="c_mar_origen"){
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","terrestre", s.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.origen_direccion}→${r.destino}`]);
         }
 
-        await sendText(from, "✅ *Tu consulta fue registrada.* Nuestro equipo te contactará a la brevedad.\n📧 comercial@conektarsa.com");
+        await sendText(from, "✅ *Tu consulta fue registrada.* Nuestro equipo te contactará a la brevedad.\n📧 hola@conektarsa.com");
 
         if (!(s.modo==="aereo" && s.aereo_tipo==="courier")){
           await sendButtons(from, "¿Tu carga es EXW?", [
@@ -1960,6 +1960,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
