@@ -474,58 +474,82 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
   const fuse = isAir ? fuseAirports : fuseSeaports;
   const label = isAir ? "aeropuerto" : "puerto";
 
+  // Sin catálogo → error crítico
   if (!catalog.length || !fuse) {
-    await sendText(from, `No encontré catálogo actualizado, uso tu ${label}: *${input}*.`);
-    await resolveFuzzySelection(from, s, action, input);
+    await sendButtons(from,
+      `⚠️ No tengo catálogo actualizado de ${label}s.\nContactá al equipo.`,
+      [{ id: "menu_si", title: "🏠 Menú principal" }]
+    );
+    s.step = "main";
     return true;
   }
 
   const results = fuse.search(input, { limit: FUSE_MAX_RESULTS });
-  if (!results.length) {
-    await sendText(from, `No encontré coincidencias claras. Uso tu ${label}: *${input}*.`);
-    await resolveFuzzySelection(from, s, action, input);
+
+  // ❌ SIN RESULTADOS
+  if (!results.length || results[0].score > 0.6) {
+    await sendButtons(from,
+      `❌ No encontré "${input}" en ${label}s.\n¿Reintentar con otro nombre?`,
+      [
+        { id: `fz_${kind}_retry`, title: "🔄 Sí, reintentar" },
+        { id: "menu_si", title: "🏠 Menú" }
+      ]
+    );
+    s._fuzzy = { kind, action };
+    s._fuzzyPrevStep = s.step;
+    s.step = "fuzzy_waiting";
     return true;
   }
 
   const best = results[0];
   const inputNorm = norm(input);
+
+  // ✅ MATCH PERFECTO
   if (best && best.item) {
     const bestNorm = best.item.norm || norm(best.item.label);
-    if (best.score != null && (best.score <= FUSE_AUTO_CONFIRM || bestNorm === inputNorm)) {
+    if (best.score <= FUSE_AUTO_CONFIRM || bestNorm === inputNorm) {
       await sendText(from, `✅ Usaremos *${best.item.label}*.`);
       await resolveFuzzySelection(from, s, action, best.item.label);
       return true;
     }
   }
 
-  const closeMatches = results.filter(r => r.score != null && r.score <= FUSE_REJECT_LIMIT);
+  const closeMatches = results.filter(r => r.score <= FUSE_REJECT_LIMIT);
+
+  // ⚠️ MATCH DUDOSO
   if (!closeMatches.length) {
-    await sendText(from, `No encontré coincidencias claras. Uso tu ${label}: *${input}*.`);
-    await resolveFuzzySelection(from, s, action, input);
+    await sendButtons(from,
+      `⚠️ No encontré coincidencias claras para "${input}".\n¿Reintentar?`,
+      [
+        { id: `fz_${kind}_retry`, title: "🔄 Sí" },
+        { id: "menu_si", title: "🏠 Menú" }
+      ]
+    );
+    s._fuzzy = { kind, action };
+    s._fuzzyPrevStep = s.step;
+    s.step = "fuzzy_waiting";
     return true;
   }
 
+  // UNA SUGERENCIA
   const first = closeMatches[0];
   if (closeMatches.length === 1 && first.score <= FUSE_SUGGEST_LIMIT) {
     s._fuzzy = {
-      kind,
-      action,
-      query: input,
+      kind, action, query: input,
       options: closeMatches.map(r => ({ label: r.item.label, score: r.score }))
     };
     s._fuzzyPrevStep = s.step;
     s.step = "fuzzy_confirm";
-    await sendButtons(from, `¿Confirmás ${label} *${first.item.label}*?`, [
+    await sendButtons(from, `¿Quisiste decir *${first.item.label}*?`, [
       { id: `fz_${kind}_0`, title: "✅ Sí" },
-      { id: `fz_${kind}_manual`, title: "✏️ Ingresar manual" }
+      { id: `fz_${kind}_retry`, title: "✏️ No, otro" }
     ]);
     return true;
   }
 
+  // MÚLTIPLES OPCIONES
   const options = closeMatches.slice(0, FUSE_MAX_RESULTS).map((r, idx) => ({
-    label: r.item.label,
-    score: r.score,
-    index: idx
+    label: r.item.label, score: r.score, index: idx
   }));
 
   s._fuzzy = { kind, action, query: input, options };
@@ -537,9 +561,13 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
     title: clip24(opt.label),
     description: opt.label.length > 24 ? opt.label : undefined
   }));
-  rows.push({ id: `fz_${kind}_manual`, title: "✏️ Ingresar manual", description: "Usar mi respuesta" });
+  rows.push({
+    id: `fz_${kind}_retry`,
+    title: "✏️ Otro",
+    description: "Escribir otro nombre"
+  });
 
-  await sendList(from, `Elegí el ${label} correcto:`, rows, isAir ? "Aeropuertos" : "Puertos", "Elegir");
+  await sendList(from, `Elegí el ${label}:`, rows, isAir ? "Aeropuertos" : "Puertos", "Elegir");
   return true;
 }
 
@@ -879,6 +907,14 @@ app.post("/webhook", async (req,res)=>{
       else if (btnId === "retry_mar_origen") {
         s.step = "mar_origen";
         await sendText(from, "📍 Escribí el *PUERTO DE ORIGEN* nuevamente (ej.: Shanghai / Hamburg).");
+        return res.sendStatus(200);
+      }
+      else if (btnId.startsWith("fz_") && btnId.endsWith("_retry")) {
+        const kind = btnId.includes("air") ? "air" : "sea";
+        const label = kind === "air" ? "aeropuerto" : "puerto";
+        s.step = s._fuzzyPrevStep || (kind === "air" ? "aer_origen" : "mar_origen");
+        s._fuzzy = null;
+        await sendText(from, `Escribí el ${label} nuevamente:`);
         return res.sendStatus(200);
       }
       else if (btnId==="confirmar"){ s.step="cotizar"; }
@@ -1294,24 +1330,36 @@ else if (btnId==="calc_go"){
       if (s.step==="mar_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" })) return res.sendStatus(200); }
       if (s.step==="aer_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" })) return res.sendStatus(200); }
       if (s.step==="aer_peso"){
-        const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
+        const peso = toNum(text);
+        if (isNaN(peso) || peso < 0) {
+          await sendText(from,"⚠️ Ingresá un *número válido* para el peso (ej.: 1232).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
         s.peso_kg = Math.max(0, Math.round(peso)); s.step="aer_vol";
         await sendText(from,"📦 *Peso volumétrico (kg)* (poné 0 si no sabés)."); return res.sendStatus(200);
       }
       if (s.step==="aer_vol"){
-        const vol = toNum(text); if (isNaN(vol)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
+        const vol = toNum(text);
+        if (isNaN(vol) || vol < 0) {
+          await sendText(from,"⚠️ Ingresá un *número válido* para el volumen (ej.: 1232).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
         s.vol_cbm = Math.max(0, vol); await askResumen(from, s); return res.sendStatus(200);
       }
       if (s.step==="courier_origen"){ s.origen_aeropuerto = text; s.step="courier_peso"; await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales)."); return res.sendStatus(200); }
       if (s.step==="courier_peso"){
-        const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
+        const peso = toNum(text);
+        if (isNaN(peso) || peso <= 0) {
+          await sendText(from,"⚠️ Ingresá un *número válido* para el peso (ej.: 25.5).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
         s.peso_kg = peso; await askResumen(from, s); return res.sendStatus(200);
       }
       if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumen(from, s); return res.sendStatus(200); }
 
       // LCL preguntas (apilable eliminado)
-      if (s.step==="lcl_tn"){ const n = toNum(text); if(!isFinite(n)||n<0){await sendText(from,"Ingresá toneladas válidas (ej.: 2,5)"); return res.sendStatus(200);} s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8,5)"); return res.sendStatus(200); }
-      if (s.step==="lcl_m3"){ const n = toNum(text); if(!isFinite(n)||n<0){await sendText(from,"Ingresá m³ válidos (ej.: 8,5)"); return res.sendStatus(200);} s.lcl_m3=n; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
+      if (s.step==="lcl_tn"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,"⚠️ Ingresá *toneladas válidas* (ej.: 2.5 o 2,5).\nNo uses letras ni símbolos."); return res.sendStatus(200);} s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8,5)"); return res.sendStatus(200); }
+      if (s.step==="lcl_m3"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,"⚠️ Ingresá *m³ válidos* (ej.: 8.5 o 8,5).\nNo uses letras ni símbolos."); return res.sendStatus(200);} s.lcl_m3=n; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
 
       if (s.step==="exw_dir"){ s.exw_dir = text; s.step="upsell"; await sendText(from,"¡Gracias! Tomamos la dirección EXW."); await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","exw_dir", s.exw_dir, "", "", "", "", "", "Dirección EXW"]); await upsellDespacho(from); return res.sendStatus(200); }
 
@@ -1346,19 +1394,35 @@ if (s.flow==="calc"){
           return res.sendStatus(200);
         }
         if (s.step==="calc_fob_unit"){
-          const n = toNum(text); if (!isFinite(n)||n<=0){ await sendText(from,"Ingresá un número válido (ej.: 125,50)."); return res.sendStatus(200); }
+          const n = toNum(text);
+          if (!isFinite(n) || n <= 0){ await sendText(from,"⚠️ Ingresá un *precio válido* (ej.: 125.50 o 125,50).\nNo uses letras ni símbolos."); return res.sendStatus(200); }
           s.fob_unit = n; s.step="calc_qty"; await sendText(from,"🔢 Ingresá la *cantidad* de unidades."); return res.sendStatus(200);
         }
         if (s.step==="calc_qty"){
-          const q = Math.max(1, Math.round(toNum(text))); s.cantidad=q; s.fob_total=(s.fob_unit||0)*q;
+          const q = toNum(text);
+          if (!isFinite(q) || q <= 0) {
+            await sendText(from,"⚠️ Ingresá una *cantidad válida* (ej.: 100).\nNo uses letras ni símbolos.");
+            return res.sendStatus(200);
+          }
+          s.cantidad = Math.max(1, Math.round(q)); s.fob_total=(s.fob_unit||0)*s.cantidad;
           s.step="calc_vol"; await sendText(from,"📦 Ingresá el *VOLUMEN total* en m³ (ej.: 8,5). Si no sabés, 0."); return res.sendStatus(200);
         }
         if (s.step==="calc_vol"){
-          s.vol_cbm = Math.max(0, toNum(text)||0); s.step="calc_peso";
+          const vol = toNum(text);
+          if (!isFinite(vol) || vol < 0) {
+            await sendText(from,"⚠️ Ingresá un *volumen válido* en m³ (ej.: 8.5 o 0).\nNo uses letras ni símbolos.");
+            return res.sendStatus(200);
+          }
+          s.vol_cbm = vol; s.step="calc_peso";
           await sendText(from,"⚖️ Ingresá el *PESO total* en kg (ej.: 120). Si no tenés el dato, 0."); return res.sendStatus(200);
         }
         if (s.step==="calc_peso"){
-          s.peso_kg = Math.max(0, toNum(text)||0);
+          const peso = toNum(text);
+          if (!isFinite(peso) || peso < 0) {
+            await sendText(from,"⚠️ Ingresá un *peso válido* en kg (ej.: 120 o 0).\nNo uses letras ni símbolos.");
+            return res.sendStatus(200);
+          }
+          s.peso_kg = peso;
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
 if (s.step==="c_mar_origen"){
