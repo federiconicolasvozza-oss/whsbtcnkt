@@ -702,6 +702,12 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
   const esVoluminoso = (m3 && m3 >= 5 && m3 <= 10);
   const iPrecio = (esVoluminoso && iPrecioVoluminoso !== -1) ? iPrecioVoluminoso : iPrecioNormal;
 
+  // DEBUG temporal
+  console.log(`[DEBUG LCL] m3=${m3}, esVoluminoso=${esVoluminoso}, iPrecioVoluminoso=${iPrecioVoluminoso}, iPrecioNormal=${iPrecioNormal}, usando columna=${iPrecio}`);
+  if (row && iPrecio !== -1) {
+    console.log(`[DEBUG LCL] Valor en columna ${iPrecio}:`, row[iPrecio]);
+  }
+
   const base = toNum(row[iPrecio]);
   const total = (wm && /lcl/i.test(modalidad)) ? (base * wm) : base;
 
@@ -1544,7 +1550,36 @@ else if (btnId==="calc_go"){
         }
         s.vol_cbm = Math.max(0, vol); await askResumen(from, s); return res.sendStatus(200);
       }
-      if (s.step==="courier_origen"){ s.origen_aeropuerto = text; s.step="courier_peso"; await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales)."); return res.sendStatus(200); }
+      if (s.step==="courier_origen"){
+        const input = norm(text);
+
+        // Validar que el país exista en nuestro catálogo
+        const region = COUNTRY_TO_REGION[input];
+
+        if (!region) {
+          // Intentar match parcial
+          const keys = Object.keys(COUNTRY_TO_REGION);
+          const match = keys.find(k => k.includes(input) || input.includes(k));
+
+          if (match) {
+            s.origen_aeropuerto = match;
+            await sendText(from, `✅ Usaremos *${match}*.`);
+          } else {
+            await sendText(from,
+              `❌ No reconozco "${text}" como país válido.\n\n` +
+              `Ejemplos: España, China, USA, Alemania, Brasil.\n\n` +
+              `Escribí el país nuevamente:`
+            );
+            return res.sendStatus(200);
+          }
+        } else {
+          s.origen_aeropuerto = input;
+        }
+
+        s.step="courier_peso";
+        await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales).");
+        return res.sendStatus(200);
+      }
       if (s.step==="courier_peso"){
         const peso = toNum(text);
         if (isNaN(peso) || peso <= 0) {
@@ -1671,6 +1706,16 @@ if (s.step==="c_mar_origen"){
           const resp = `✅ *Tarifa estimada (AÉREO – Carga general)*\n${unit} + *Gastos Locales*.${min}\n\n*Kilos facturables:* ${r.facturableKg}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","aereo", s.origen_aeropuerto, r.destino, s.peso_kg||"", s.vol_cbm||"", "", r.totalUSD, `Aéreo ${s.origen_aeropuerto}→${r.destino}`]);
+
+          // Sugerencias de conveniencia
+          const sugerencias = await analizarConveniencia(s);
+          if (sugerencias.length > 0) {
+            await sleep(500);
+            for (const sug of sugerencias) {
+              await sendText(from, sug);
+              await sleep(300);
+            }
+          }
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
           if (!r){ await sendText(from,"❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
@@ -1678,6 +1723,16 @@ if (s.step==="c_mar_origen"){
           const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", r.totalUSD, `Courier ${s.origen_aeropuerto}`]);
+
+          // Sugerencias de conveniencia
+          const sugerencias = await analizarConveniencia(s);
+          if (sugerencias.length > 0) {
+            await sleep(500);
+            for (const sug of sugerencias) {
+              await sendText(from, sug);
+              await sleep(300);
+            }
+          }
           s.step = "ask_email";
           await sendText(from, "📧 ¿Deseás que te enviemos la cotización por correo?\nDejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
           return res.sendStatus(200);
@@ -1707,6 +1762,16 @@ if (s.step==="c_mar_origen"){
             const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n${voluminosoTexto}${tiempoTexto}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
+
+            // Sugerencias de conveniencia
+            const sugerencias = await analizarConveniencia(s);
+            if (sugerencias.length > 0) {
+              await sleep(500);
+              for (const sug of sugerencias) {
+                await sendText(from, sug);
+                await sleep(300);
+              }
+            }
           } else {
             const modalidad = "FCL" + (s.contenedor||"");
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
