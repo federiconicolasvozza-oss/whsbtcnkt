@@ -227,16 +227,14 @@ async function sendTypingIndicator(to, durationMs = 3000) {
 
 /* ---- Menús / rating / upsell ---- */
 const WELCOME_TEXT =
-  "🤖 *Soy tu Asistente Logístico Virtual*\n\n" +
-  "Todos dicen que *odian los bots*... pero este vas a *amarlo* ❤️.\n\n" +
-  "Soy el *primer bot de Comex hecho para simplificarte la vida*:\n" +
-  "• **Cotizá fletes internacionales** (✈️ 🚢 🚚)\n" +
-  "• **Simulá impuestos y costos de importación** (FOB → CIF + tributos)\n" +
-  "• **Calculá tarifas de transporte local** en $ ARS\n\n" +
-  "⚡ **Mi objetivo:** darte información clara en *segundos* y ahorrarte tiempo en tus decisiones logísticas.\n\n" +
-  "📌 *Disclaimer:* este servicio es **orientativo** y no reemplaza la confirmación formal de nuestro equipo.\n\n" +
-  "🌐 Más info en: www.conektarsa.com\n\n" +
-  "🔄 Recordá: en cualquier momento escribí *menu* o *reset* para iniciar nuevamente.";
+  "⚡ *Asistente Logístico de Conektar*\n\n" +
+  "Cotizo fletes internacionales en segundos:\n" +
+  "✈️ Aéreo  •  🚢 Marítimo  •  🚚 Terrestre\n\n" +
+  "También:\n" +
+  "🧮 Costeo de importación (FOB → CIF)\n" +
+  "🚚 Transporte local Argentina\n\n" +
+  "⚠️ Cotizaciones orientativas, no reemplazan confirmación formal.\n\n" +
+  "Escribí *menu* para volver al inicio.";
 
 const sendMainActions = async (to) => {
   return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
