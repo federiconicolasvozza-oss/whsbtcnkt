@@ -12,7 +12,8 @@
     "dotenv": "^16.1.0",
     "express": "^5.1.0",
     "googleapis": "^156.0.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "fuse.js": "^6.6.2"
   }
 }
 
