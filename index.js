@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
+import Fuse from "fuse.js";
 
 dotenv.config();
 const app = express();
@@ -41,6 +42,24 @@ const LOGO_URL = (process.env.LOGO_URL ||
 const INSURANCE_RATE   = Number(process.env.INSURANCE_RATE   ?? 0.01);
 const TASA_ESTATISTICA = Number(process.env.TASA_ESTATISTICA ?? 0.03);
 const RATE_IIGG        = Number(process.env.RATE_IIGG        ?? 0.06);
+
+let AIRPORT_CATALOG = [];
+let SEAPORT_CATALOG = [];
+let fuseAirports = null;
+let fuseSeaports = null;
+
+const FUSE_CONFIG = {
+  includeScore: true,
+  threshold: 0.35,
+  ignoreLocation: true,
+  minMatchCharLength: 2,
+  distance: 120,
+  keys: ["label", "tokens"]
+};
+const FUSE_AUTO_CONFIRM = 0.05;
+const FUSE_SUGGEST_LIMIT = 0.22;
+const FUSE_REJECT_LIMIT = 0.32;
+const FUSE_MAX_RESULTS = 7;
 
 /* ========= Google OAuth ========= */
 function chooseCredPath(filename) {
@@ -343,6 +362,187 @@ const AIR_ALIASES = {
 };
 const AIR_MATCHERS = Object.entries(AIR_ALIASES).map(([k,v]) => ({ key:k, parts:v.split("|").map(norm) }));
 
+const AIR_ALIAS_MAP = Object.fromEntries(
+  Object.entries(AIR_ALIASES).map(([k, v]) => [norm(k), v.split("|")])
+);
+
+const toTokens = (value) => {
+  const tokens = new Set();
+  const push = (x) => { const t = norm(x); if (t) tokens.add(t); };
+  push(value);
+  const clean = (value || "").toString().replace(/[()\[\]]/g, " ");
+  clean.split(/[\/,;|-]/).forEach(push);
+  clean.split(/\s+/).forEach(push);
+  return Array.from(tokens).filter(Boolean);
+};
+
+async function loadTransportCatalogs() {
+  if (!TAR_SHEET_ID) {
+    AIRPORT_CATALOG = [];
+    SEAPORT_CATALOG = [];
+    fuseAirports = null;
+    fuseSeaports = null;
+    return;
+  }
+
+  try {
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos", "aéreos", "aereo"]);
+    if (rows.length) {
+      const header = rows[0];
+      const data = rows.slice(1);
+      const iOrigen = headerIndex(header, "origen");
+      const seen = new Map();
+      if (iOrigen !== -1) {
+        for (const row of data) {
+          const label = (row[iOrigen] || "").toString().trim();
+          if (!label) continue;
+          const extras = AIR_ALIAS_MAP[norm(label)] || [];
+          const tokens = new Set(toTokens(label));
+          for (const extra of extras) {
+            for (const token of toTokens(extra)) tokens.add(token);
+          }
+          const entry = { label, norm: norm(label), tokens: Array.from(tokens).filter(Boolean) };
+          if (!seen.has(entry.norm)) seen.set(entry.norm, entry);
+        }
+      }
+      AIRPORT_CATALOG = Array.from(seen.values());
+      fuseAirports = AIRPORT_CATALOG.length ? new Fuse(AIRPORT_CATALOG, FUSE_CONFIG) : null;
+    }
+  } catch (e) {
+    console.error("loadTransportCatalogs (air)", e?.message || e);
+    AIRPORT_CATALOG = [];
+    fuseAirports = null;
+  }
+
+  try {
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos", "marítimos", "martimos", "mar"]);
+    if (rows.length) {
+      const header = rows[0];
+      const data = rows.slice(1);
+      const iOrigen = headerIndex(header, "origen");
+      const seen = new Map();
+      if (iOrigen !== -1) {
+        for (const row of data) {
+          const label = (row[iOrigen] || "").toString().trim();
+          if (!label) continue;
+          const entry = { label, norm: norm(label), tokens: toTokens(label) };
+          if (!seen.has(entry.norm)) seen.set(entry.norm, entry);
+        }
+      }
+      SEAPORT_CATALOG = Array.from(seen.values());
+      fuseSeaports = SEAPORT_CATALOG.length ? new Fuse(SEAPORT_CATALOG, FUSE_CONFIG) : null;
+    }
+  } catch (e) {
+    console.error("loadTransportCatalogs (sea)", e?.message || e);
+    SEAPORT_CATALOG = [];
+    fuseSeaports = null;
+  }
+
+  console.log(`📚 Catálogos cargados: ✈️ ${AIRPORT_CATALOG.length} aeropuertos, 🚢 ${SEAPORT_CATALOG.length} puertos.`);
+}
+
+async function resolveFuzzySelection(from, s, action, value) {
+  const chosen = (value || "").toString().trim();
+  if (!chosen) return;
+
+  if (action === "mar_origen") {
+    s.origen_puerto = chosen;
+    await askResumen(from, s);
+  } else if (action === "aer_origen") {
+    s.origen_aeropuerto = chosen;
+    s.step = "aer_peso";
+    await sendText(from, "⚖️ *Peso (kg)* (entero).");
+  } else if (action === "c_mar_origen") {
+    s.origen_puerto = chosen;
+    s.step = "c_confirm";
+    await confirmCalc(from, s);
+  }
+}
+
+async function fuzzySearchPlace({ from, s, query, kind, action }) {
+  const input = (query || "").toString().trim();
+  if (!input) {
+    await sendText(from, "Ingresá un valor válido.");
+    return true;
+  }
+
+  s._fuzzy = null;
+  s._fuzzyPrevStep = null;
+
+  const isAir = kind === "air";
+  const catalog = isAir ? AIRPORT_CATALOG : SEAPORT_CATALOG;
+  const fuse = isAir ? fuseAirports : fuseSeaports;
+  const label = isAir ? "aeropuerto" : "puerto";
+
+  if (!catalog.length || !fuse) {
+    await sendText(from, `No encontré catálogo actualizado, uso tu ${label}: *${input}*.`);
+    await resolveFuzzySelection(from, s, action, input);
+    return true;
+  }
+
+  const results = fuse.search(input, { limit: FUSE_MAX_RESULTS });
+  if (!results.length) {
+    await sendText(from, `No encontré coincidencias claras. Uso tu ${label}: *${input}*.`);
+    await resolveFuzzySelection(from, s, action, input);
+    return true;
+  }
+
+  const best = results[0];
+  const inputNorm = norm(input);
+  if (best && best.item) {
+    const bestNorm = best.item.norm || norm(best.item.label);
+    if (best.score != null && (best.score <= FUSE_AUTO_CONFIRM || bestNorm === inputNorm)) {
+      await sendText(from, `✅ Usaremos *${best.item.label}*.`);
+      await resolveFuzzySelection(from, s, action, best.item.label);
+      return true;
+    }
+  }
+
+  const closeMatches = results.filter(r => r.score != null && r.score <= FUSE_REJECT_LIMIT);
+  if (!closeMatches.length) {
+    await sendText(from, `No encontré coincidencias claras. Uso tu ${label}: *${input}*.`);
+    await resolveFuzzySelection(from, s, action, input);
+    return true;
+  }
+
+  const first = closeMatches[0];
+  if (closeMatches.length === 1 && first.score <= FUSE_SUGGEST_LIMIT) {
+    s._fuzzy = {
+      kind,
+      action,
+      query: input,
+      options: closeMatches.map(r => ({ label: r.item.label, score: r.score }))
+    };
+    s._fuzzyPrevStep = s.step;
+    s.step = "fuzzy_confirm";
+    await sendButtons(from, `¿Confirmás ${label} *${first.item.label}*?`, [
+      { id: `fz_${kind}_0`, title: "✅ Sí" },
+      { id: `fz_${kind}_manual`, title: "✏️ Ingresar manual" }
+    ]);
+    return true;
+  }
+
+  const options = closeMatches.slice(0, FUSE_MAX_RESULTS).map((r, idx) => ({
+    label: r.item.label,
+    score: r.score,
+    index: idx
+  }));
+
+  s._fuzzy = { kind, action, query: input, options };
+  s._fuzzyPrevStep = s.step;
+  s.step = "fuzzy_select";
+
+  const rows = options.map((opt) => ({
+    id: `fz_${kind}_${opt.index}`,
+    title: clip24(opt.label),
+    description: opt.label.length > 24 ? opt.label : undefined
+  }));
+  rows.push({ id: `fz_${kind}_manual`, title: "✏️ Ingresar manual", description: "Usar mi respuesta" });
+
+  await sendList(from, `Elegí el ${label} correcto:`, rows, isAir ? "Aeropuertos" : "Puertos", "Elegir");
+  return true;
+}
+
 /* ========= Cotizadores (tarifas) ========= */
 async function cotizarAereo({ origen, kg, vol }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos","aéreos","aereo"]);
@@ -455,6 +655,7 @@ const emptyState = () => ({
   // árbol
   sel_n1:null, sel_n2:null, sel_n3:null,
   _tree:null, _find:null, _matches:null,
+  _fuzzy:null, _fuzzyPrevStep:null,
   // email
   email:null,
   // flete local
@@ -634,9 +835,42 @@ app.post("/webhook", async (req,res)=>{
     if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
     else { s.step="courier_pf"; await sendButtons(from,"Para *Courier*, ¿quién importa?",[{id:"pf","title":"👤 Persona Física"},{id:"emp","title":"🏢 Empresa"}]); }
   }
-      else if (btnId==="pf" || btnId==="emp"){
+      else if (btnId==="pf" || btnId==="emp"){ 
         s.courier_pf = btnId==="pf" ? "PF" : "EMP";
         s.step="courier_origen"; await sendText(from,"🌍 *País/Ciudad ORIGEN* (ej.: España / China / USA).");
+      }
+
+      else if (btnId.startsWith("fz_")) {
+        const parts = btnId.split("_");
+        const kind = parts[1] || "";
+        const target = parts.slice(2).join("_") || "";
+        const state = s._fuzzy;
+        const label = kind === "air" ? "aeropuerto" : "puerto";
+        if (!state || state.kind !== kind) {
+          await sendText(from, `La selección expiró. Volvé a ingresar el ${label}.`);
+          return res.sendStatus(200);
+        }
+
+        const prevStep = s._fuzzyPrevStep || s.step;
+        s._fuzzy = null;
+        s._fuzzyPrevStep = null;
+        s.step = prevStep;
+
+        let value = state.query;
+        if (target !== "manual") {
+          const idx = Number(target);
+          if (!Number.isNaN(idx) && state.options?.[idx]) {
+            value = state.options[idx].label;
+            await sendText(from, `✅ Elegiste *${value}*.`);
+          } else {
+            await sendText(from, `No pude identificar la opción. Uso tu ${label}: *${value}*.`);
+          }
+        } else {
+          await sendText(from, `Uso tu ${label}: *${value}*.`);
+        }
+
+        await resolveFuzzySelection(from, s, state.action, value);
+        return res.sendStatus(200);
       }
 
       else if (btnId==="confirmar"){ s.step="cotizar"; }
@@ -1049,8 +1283,8 @@ else if (btnId==="calc_go"){
       }
 
       // Cotizador clásico
-      if (s.step==="mar_origen"){ s.origen_puerto = text; await askResumen(from, s); return res.sendStatus(200); }
-      if (s.step==="aer_origen"){ s.origen_aeropuerto = text; s.step="aer_peso"; await sendText(from,"⚖️ *Peso (kg)* (entero)."); return res.sendStatus(200); }
+      if (s.step==="mar_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" })) return res.sendStatus(200); }
+      if (s.step==="aer_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" })) return res.sendStatus(200); }
       if (s.step==="aer_peso"){
         const peso = toNum(text); if (isNaN(peso)) { await sendText(from,"Ingresá un número válido."); return res.sendStatus(200); }
         s.peso_kg = Math.max(0, Math.round(peso)); s.step="aer_vol";
@@ -1076,10 +1310,9 @@ else if (btnId==="calc_go"){
       // Calculadora — búsqueda libre
 if (s.flow==="calc"){
   if (s.step==="c_mar_origen"){
-    s.origen_puerto = text;
-    s.step = "c_confirm";
-    await confirmCalc(from, s);
-    return res.sendStatus(200);
+    if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
+      return res.sendStatus(200);
+    }
   }
 }    // ← acá hoy solo hay *un* cierre
         if (s.step==="calc_desc_wait"){
@@ -1121,10 +1354,9 @@ if (s.flow==="calc"){
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
 if (s.step==="c_mar_origen"){
-  s.origen_puerto = text;
-  s.step = "c_confirm";
-  await confirmCalc(from, s);
-  return res.sendStatus(200);
+  if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
+    return res.sendStatus(200);
+  }
 }
     }
 
@@ -1200,7 +1432,10 @@ app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 /* ========= Start ========= */
-app.listen(PORT, ()=> console.log(`🚀 Bot v4.0 en http://localhost:${PORT}`));
+app.listen(PORT, ()=> {
+  console.log(`🚀 Bot v4.0 en http://localhost:${PORT}`);
+  loadTransportCatalogs().catch(e => console.error("loadTransportCatalogs", e?.message || e));
+});
 
 /* ========= Helpers de resumen ========= */
 function modoMayus(m) {
