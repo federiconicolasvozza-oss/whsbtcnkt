@@ -200,6 +200,31 @@ const sendList = (to, text, rows, sectionTitle="Opciones", btnTitle="Elegir") =>
 const sendImage = (to, link, caption="") =>
   sendMessage({ messaging_product:"whatsapp", to, type:"image", image:{ link, caption } });
 
+async function sendTypingIndicator(to, durationMs = 3000) {
+  const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
+
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: to,
+        typing: "on"
+      })
+    });
+
+    await sleep(Math.min(durationMs, 3000));
+
+  } catch (e) {
+    console.error("typing indicator error", e?.message || e);
+  }
+}
+
 /* ---- Menús / rating / upsell ---- */
 const WELCOME_TEXT =
   "🤖 *Soy tu Asistente Logístico Virtual*\n\n" +
@@ -1211,6 +1236,8 @@ else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; aw
 else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
 else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
 else if (btnId==="calc_go"){
+        await sendTypingIndicator(from, 3000);
+
         // === calcular CIF+impuestos
         const M = s.matriz || { di:0, iva:0.21, iva_ad:0, iibb:0.035, iigg:RATE_IIGG, internos:0, tasa_est:TASA_ESTATISTICA, nota:"" };
         let fleteUSD = 0, fleteDetalle = "";
@@ -1402,8 +1429,16 @@ else if (btnId==="calc_go"){
       }
 
       // Cotizador clásico
-      if (s.step==="mar_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" })) return res.sendStatus(200); }
-      if (s.step==="aer_origen"){ if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" })) return res.sendStatus(200); }
+      if (s.step==="mar_origen"){
+        await sendTypingIndicator(from, 2000);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" }))
+          return res.sendStatus(200);
+      }
+      if (s.step==="aer_origen"){
+        await sendTypingIndicator(from, 2000);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" }))
+          return res.sendStatus(200);
+      }
       if (s.step==="aer_peso"){
         const peso = toNum(text);
         if (isNaN(peso) || peso < 0) {
@@ -1455,12 +1490,15 @@ else if (btnId==="calc_go"){
       // Calculadora — búsqueda libre
 if (s.flow==="calc"){
   if (s.step==="c_mar_origen"){
+    await sendTypingIndicator(from, 2000);
     if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
       return res.sendStatus(200);
     }
   }
 }    // ← acá hoy solo hay *un* cierre
         if (s.step==="calc_desc_wait"){
+          await sendTypingIndicator(from, 2000);
+
           const query = text;
           const M = await getMatrix();
           const V = indexMatrix(M);
@@ -1515,6 +1553,7 @@ if (s.flow==="calc"){
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
 if (s.step==="c_mar_origen"){
+  await sendTypingIndicator(from, 2000);
   if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
     return res.sendStatus(200);
   }
@@ -1524,6 +1563,7 @@ if (s.step==="c_mar_origen"){
     /* ===== COTIZAR (ejecución) ===== */
 /* ===== COTIZAR (ejecución) ===== */
     if (s.step==="cotizar"){
+      await sendTypingIndicator(from, 2500);
       try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
