@@ -449,6 +449,22 @@ async function resolveFuzzySelection(from, s, action, value) {
     await askResumen(from, s);
   } else if (action === "aer_origen") {
     s.origen_aeropuerto = chosen;
+
+    // Verificar ruta ANTES de continuar
+    const rutaExiste = await verificarRutaAerea(chosen);
+
+    if (!rutaExiste) {
+      await sendButtons(from,
+        `❌ No encontré rutas disponibles desde *${chosen}*.\n¿Qué querés hacer?`,
+        [
+          { id:"retry_aer_origen", title:"🔄 Otro aeropuerto" },
+          { id:"menu_si", title:"🏠 Menú" }
+        ]
+      );
+      s.step = "waiting_retry";
+      return;
+    }
+
     s.step = "aer_peso";
     await sendText(from, "⚖️ *Peso (kg)* (entero).");
   } else if (action === "c_mar_origen") {
@@ -601,6 +617,32 @@ async function cotizarAereo({ origen, kg, vol }) {
   return { pricePerKg, minKg, facturableKg: facturable, applyMin, totalUSD: pricePerKg * facturable, destino: "Ezeiza (EZE)" };
 }
 
+async function verificarRutaAerea(origen) {
+  try {
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos","aéreos","aereo"]);
+    if (!rows.length) return false;
+
+    const header = rows[0], data = rows.slice(1);
+    const iOrigen = headerIndex(header,"origen");
+    const iDest   = headerIndex(header,"destino");
+
+    const want = norm(origen);
+    const tokens = [want];
+    const alias = AIR_MATCHERS.find(a => a.parts.some(p => want.includes(p) || p.includes(want)));
+    if (alias) tokens.push(...alias.parts);
+
+    const row = data.find(r => {
+      const cell = norm(r[iOrigen]||"");
+      const dest = norm(r[iDest]||"");
+      return dest.includes("eze") && tokens.some(t => t && cell.includes(t));
+    });
+
+    return !!row;
+  } catch {
+    return true; // fail-safe: permitir continuar si hay error
+  }
+}
+
 async function cotizarMaritimo({ origen, modalidad, wm=null }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
   if (!rows.length) throw new Error("Maritimos vacío");
@@ -673,8 +715,8 @@ const emptyState = () => ({
   courier_pf:null,
   terrestre_tipo:"FTL", origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
   peso_kg:null, vol_cbm:null, exw_dir:null, valor_mercaderia:null, tipo_mercaderia:null,
-  // LCL extras (apilable removido)
-  lcl_tn:null, lcl_m3:null,
+  // LCL extras
+  lcl_tn:null, lcl_m3:null, lcl_apilable:null,
   // calculadora
   flow:null, producto_desc:null, categoria:null, matriz:null,
   fob_unit:null, cantidad:null, fob_total:null,
@@ -754,7 +796,10 @@ const askProdMetodo = (to) => sendButtons(to,
   [{ id:"calc_desc", title:"📝 Descrip." },{ id:"calc_cat",  title:"📂 Categoría" },{ id:"calc_pop",  title:"⭐ Populares" }]
 );
 const populares = ["🧱 Materiales","🪛 Ferreteria","🧬Biotecnolgía","🚙 Vehículos","🖥️ Componentes PC","🧪Químicos"];
-const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({ id:`${pref}_${i}`, title: clip24(t), description: t.length>24?t:undefined }));
+const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({
+  id:`${pref}_${i}`,
+  title: clip24(t)
+}));
 
 /* ========= VERIFY ========= */
 app.get("/webhook", (req,res)=>{
@@ -831,9 +876,12 @@ app.post("/webhook", async (req,res)=>{
       }
       else if (btnId==="mar_LCL"){
         s.maritimo_tipo = "LCL";
+        s.lcl_tn = null;
+        s.lcl_m3 = null;
+        s.lcl_apilable = null;
         s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
       }
-      else if (btnId==="mar_FCL"){
+      else if (btnId==="mar_FCL"){ 
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
       }
   else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
@@ -849,11 +897,27 @@ app.post("/webhook", async (req,res)=>{
       // Cotizador clásico
       s.maritimo_tipo = "FCL";
       s.contenedor = cont;
-      s.lcl_tn = null; 
+      s.lcl_tn = null;
       s.lcl_m3 = null;
+      s.lcl_apilable = null;
       s.step = "mar_origen";
       await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
     }
+  }
+  else if (btnId==="lcl_api_si"){
+    s.lcl_apilable = "Sí";
+    s.step="mar_origen";
+    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+  }
+  else if (btnId==="lcl_api_no"){
+    s.lcl_apilable = "No";
+    s.step="mar_origen";
+    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
+  }
+  else if (btnId==="lcl_api_ns"){
+    s.lcl_apilable = "No lo sé (cotizado como apilable)";
+    s.step="mar_origen";
+    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).\n\n_Nota: La carga se cotizará como apilable. Es importante confirmar este dato con tu proveedor._");
   }
   else if (btnId==="aer_carga" || btnId==="aer_courier"){
     s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
@@ -888,7 +952,9 @@ app.post("/webhook", async (req,res)=>{
             value = state.options[idx].label;
             await sendText(from, `✅ Elegiste *${value}*.`);
           } else {
-            await sendText(from, `No pude identificar la opción. Uso tu ${label}: *${value}*.`);
+            await sendText(from, `⚠️ No pude identificar la opción seleccionada.\n\nPor favor, verificá que esté bien escrito e intentá nuevamente.`);
+            s.step = s._fuzzyPrevStep || s.step;
+            return res.sendStatus(200);
           }
         } else {
           await sendText(from, `Uso tu ${label}: *${value}*.`);
@@ -1356,9 +1422,23 @@ else if (btnId==="calc_go"){
       }
       if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumen(from, s); return res.sendStatus(200); }
 
-      // LCL preguntas (apilable eliminado)
+      // LCL preguntas
       if (s.step==="lcl_tn"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,"⚠️ Ingresá *toneladas válidas* (ej.: 2.5 o 2,5).\nNo uses letras ni símbolos."); return res.sendStatus(200);} s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8,5)"); return res.sendStatus(200); }
-      if (s.step==="lcl_m3"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,"⚠️ Ingresá *m³ válidos* (ej.: 8.5 o 8,5).\nNo uses letras ni símbolos."); return res.sendStatus(200);} s.lcl_m3=n; s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen)."); return res.sendStatus(200); }
+      if (s.step==="lcl_m3"){
+        const n = toNum(text);
+        if(!isFinite(n) || n < 0){
+          await sendText(from,"⚠️ Ingresá *m³ válidos* (ej.: 8.5 o 8,5).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
+        s.lcl_m3 = n;
+        s.step = "lcl_apilable";
+        await sendButtons(from, "📦 ¿La carga es *apilable*?", [
+          { id:"lcl_api_si", title:"✅ Sí" },
+          { id:"lcl_api_no", title:"❌ No" },
+          { id:"lcl_api_ns", title:"🤷 No lo sé" }
+        ]);
+        return res.sendStatus(200);
+      }
 
       if (s.step==="exw_dir"){ s.exw_dir = text; s.step="upsell"; await sendText(from,"¡Gracias! Tomamos la dirección EXW."); await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","exw_dir", s.exw_dir, "", "", "", "", "", "Dirección EXW"]); await upsellDespacho(from); return res.sendStatus(200); }
 
@@ -1551,7 +1631,7 @@ function resumenTexto(d){
   if (d.modo==="maritimo"){
     if (d.maritimo_tipo==="LCL"){
       lines.push("• Tipo: *LCL*");
-      lines.push(`• W/M input: t=${fmtUSD(d.lcl_tn||0)} • m³=${fmtUSD(d.lcl_m3||0)}`);
+      lines.push(`• Ton: ${fmtUSD(d.lcl_tn||0)} • m³: ${fmtUSD(d.lcl_m3||0)} • Apilable: ${d.lcl_apilable||"?"}`);
     } else {
       lines.push(`• Tipo: *FCL* ${d.contenedor?`(Equipo: ${d.contenedor})`:""}`);
     }
