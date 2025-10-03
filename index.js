@@ -1261,7 +1261,7 @@ else if (btnId==="calc_go"){
       if (s.step==="ask_empresa"){
         s.empresa = text;
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
-        await sendMainActions(from);
+        await sendMainActions(from, { includeWelcome: false });
         s.step="main";
         return res.sendStatus(200);
       }
