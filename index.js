@@ -205,7 +205,6 @@ const WELCOME_TEXT =
   "🔄 Recordá: en cualquier momento escribí *menu* o *reset* para iniciar nuevamente.";
 
 const sendMainActions = async (to) => {
-  await sendText(to, WELCOME_TEXT);
   return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
     { id:"action_calcular", title:"🧮 Costeo Impo" },
