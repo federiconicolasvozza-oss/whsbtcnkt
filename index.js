@@ -50,7 +50,7 @@ let fuseSeaports = null;
 
 const FUSE_CONFIG = {
   includeScore: true,
-  threshold: 0.35,
+  threshold: 0.45,
   ignoreLocation: true,
   minMatchCharLength: 2,
   distance: 120,
@@ -873,6 +873,16 @@ app.post("/webhook", async (req,res)=>{
         return res.sendStatus(200);
       }
 
+      else if (btnId === "retry_aer_origen") {
+        s.step = "aer_origen";
+        await sendText(from, "✈️ Escribí el *AEROPUERTO ORIGEN* nuevamente (IATA o ciudad. Ej.: FRA / Frankfurt).");
+        return res.sendStatus(200);
+      }
+      else if (btnId === "retry_mar_origen") {
+        s.step = "mar_origen";
+        await sendText(from, "📍 Escribí el *PUERTO DE ORIGEN* nuevamente (ej.: Shanghai / Hamburg).");
+        return res.sendStatus(200);
+      }
       else if (btnId==="confirmar"){ s.step="cotizar"; }
       else if (btnId==="editar"){ await sendMainActions(from); s.step="main"; }
       else if (btnId==="cancelar"){ sessions.delete(from); await sendText(from,"Solicitud cancelada. ¡Gracias!"); }
@@ -1182,7 +1192,7 @@ else if (btnId==="calc_go"){
         await logRating(from, s.empresa, val);
       }
 
-      else if (btnId==="menu_si"){ await sendMainActions(from); }
+      else if (btnId==="menu_si"){ await sendMainActions(from); s.step="main"; }
       else if (btnId==="menu_no"){ await sendText(from,"¡Gracias! Si necesitás algo más, escribinos cuando quieras."); }
 
       // === Flete Local ===
@@ -1258,10 +1268,14 @@ else if (btnId==="calc_go"){
 
     /* ===== TEXTO ===== */
     if (type==="text") {
+      if (s.step==="waiting_retry"){
+        await sendText(from, "Elegí una opción de los botones anteriores para continuar.");
+        return res.sendStatus(200);
+      }
       if (s.step==="ask_empresa"){
         s.empresa = text;
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
-        await sendMainActions(from, { includeWelcome: false });
+        await sendMainActions(from);
         s.step="main";
         return res.sendStatus(200);
       }
@@ -1366,7 +1380,17 @@ if (s.step==="c_mar_origen"){
       try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
-          if (!r){ await sendText(from,"❌ No encontré esa ruta en *Aéreos*. Probá con ciudad o IATA (PVG, PEK, NRT)."); return res.sendStatus(200); }
+          if (!r){
+            await sendButtons(from,
+              "❌ No encontré esa ruta en *Aéreos*. ¿Qué querés hacer?",
+              [
+                { id:"retry_aer_origen", title:"🔄 Otro aeropuerto" },
+                { id:"menu_si", title:"🏠 Menú principal" }
+              ]
+            );
+            s.step = "waiting_retry";
+            return res.sendStatus(200);
+          }
           const unit = `USD ${fmtUSD(r.pricePerKg)} por KG (FOB)`;
           const min  = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
           const resp = `✅ *Tarifa estimada (AÉREO – Carga general)*\n${unit} + *Gastos Locales*.${min}\n\n*Kilos facturables:* ${r.facturableKg}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
@@ -1386,14 +1410,34 @@ if (s.step==="c_mar_origen"){
           if (s.maritimo_tipo==="LCL"){
             const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad: "LCL", wm });
-            if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*. Revisá la pestaña."); return res.sendStatus(200); }
+            if (!r){
+              await sendButtons(from,
+                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
+                [
+                  { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                  { id:"menu_si", title:"🏠 Menú principal" }
+                ]
+              );
+              s.step = "waiting_retry";
+              return res.sendStatus(200);
+            }
             const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
           } else {
             const modalidad = "FCL" + (s.contenedor||"");
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
-            if (!r){ await sendText(from,"❌ No encontré esa ruta/modalidad en *Marítimos*."); return res.sendStatus(200); }
+            if (!r){
+              await sendButtons(from,
+                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
+                [
+                  { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                  { id:"menu_si", title:"🏠 Menú principal" }
+                ]
+              );
+              s.step = "waiting_retry";
+              return res.sendStatus(200);
+            }
             const texto = `✅ *Tarifa estimada (Marítimo ${modalidad})*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n*Origen:* ${s.origen_puerto}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.origen_puerto}→${r.destino}`]);
