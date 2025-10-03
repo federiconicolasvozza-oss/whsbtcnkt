@@ -96,24 +96,33 @@ const norm = s => (s||"").toString().toLowerCase()
 const toNum = (s) => {
   if (typeof s === "number") return s;
   if (!s) return NaN;
+
   let str = String(s).trim();
-  str = str.replace(/[^\d.,-]/g, ""); // quita $ y letras
+  const original = str;
+
+  str = str.replace(/[^\d.,-]/g, "");
+
+  if (!str || str === "-" || str === "." || str === ",") {
+    return NaN;
+  }
+
+  if (!/\d/.test(original)) {
+    return NaN;
+  }
 
   const hasDot = str.includes(".");
   const hasComma = str.includes(",");
 
   if (hasDot && hasComma) {
-    // "1.234,56" -> 1234.56
     str = str.replace(/\./g, "").replace(",", ".");
   } else if (hasComma && !hasDot) {
-    // "123,45" -> 123.45
     str = str.replace(",", ".");
   } else if (hasDot && !hasComma) {
-    // "1.234" (miles) o "1234.5" (decimal). Tomo el último punto como decimal
     const last = str.lastIndexOf(".");
     str = str.replace(/\./g, "");
     if (last !== -1) str = str.slice(0,last) + "." + str.slice(last);
   }
+
   const n = Number(str);
   return isFinite(n) ? n : NaN;
 };
@@ -879,7 +888,8 @@ app.post("/webhook", async (req,res)=>{
         s.lcl_tn = null;
         s.lcl_m3 = null;
         s.lcl_apilable = null;
-        s.step="mar_origen"; await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
+        s.step="lcl_tn";
+        await sendText(from,"⚖️ Ingresá las *TONELADAS* totales (ej.: 2.5)");
       }
       else if (btnId==="mar_FCL"){ 
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
