@@ -677,14 +677,16 @@ async function verificarRutaAerea(origen) {
   }
 }
 
-async function cotizarMaritimo({ origen, modalidad, wm=null }) {
+async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
   if (!rows.length) throw new Error("Maritimos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
   const iMod    = headerIndex(header,"modalidad");
-  const iPrecio = headerIndex(header,"precio medio","precio usd medio","precio","precio w/m","w/m");
+  const iPrecioNormal = headerIndex(header,"precio medio","precio usd medio","precio","precio w/m","w/m");
+  const iPrecioVoluminoso = headerIndex(header,"de 5 a 10 m3");
+  const iTiempoTransito = headerIndex(header,"dias de transito","tiempo de transito");
 
   const want = norm(origen);
   const row = data.find(r => {
@@ -696,9 +698,27 @@ async function cotizarMaritimo({ origen, modalidad, wm=null }) {
   });
   if (!row) return null;
 
+  // Determinar si aplica tarifa voluminosa
+  const esVoluminoso = (m3 && m3 >= 5 && m3 <= 10);
+  const iPrecio = (esVoluminoso && iPrecioVoluminoso !== -1) ? iPrecioVoluminoso : iPrecioNormal;
+
   const base = toNum(row[iPrecio]);
   const total = (wm && /lcl/i.test(modalidad)) ? (base * wm) : base;
-  return { modalidad, totalUSD: total, destino: "Puerto de Buenos Aires", tarifaBase: base, wm };
+
+  // Leer tiempo de tránsito
+  const diasTransito = (iTiempoTransito !== -1 && row[iTiempoTransito])
+    ? toNum(row[iTiempoTransito])
+    : null;
+
+  return {
+    modalidad,
+    totalUSD: total,
+    destino: "Puerto de Buenos Aires",
+    tarifaBase: base,
+    wm,
+    diasTransito,
+    esVoluminoso
+  };
 }
 
 async function cotizarTerrestre({ origen }) {
@@ -1247,8 +1267,18 @@ else if (btnId==="calc_go"){
             if (r){ fleteUSD = r.totalUSD; fleteDetalle = `Flete ✈️ (Aéreo): USD ${fmtUSD(fleteUSD)}`; }
           } else if (s.calc_modo==="maritimo"){
             const modalidad = s.calc_maritimo_tipo==="FCL" ? (s.calc_contenedor?`FCL${s.calc_contenedor}`:"FCL") : "LCL";
-            const r = await cotizarMaritimo({ origen: s.origen_puerto || "Shanghai", modalidad, wm: s.calc_maritimo_tipo==="LCL" ? Math.max((s.lcl_tn||0), (s.vol_cbm||0)) : null });
-            if (r){ fleteUSD = r.totalUSD; fleteDetalle = `Flete 🚢 (Marítimo ${modalidad}): USD ${fmtUSD(fleteUSD)}`; }
+            const wmCalc = s.calc_maritimo_tipo==="LCL" ? Math.max((s.lcl_tn||0), (s.vol_cbm||0)) : null;
+            const r = await cotizarMaritimo({
+              origen: s.origen_puerto || "Shanghai",
+              modalidad,
+              wm: wmCalc,
+              m3: s.calc_maritimo_tipo==="LCL" ? s.vol_cbm : null
+            });
+            if (r){
+              fleteUSD = r.totalUSD;
+              const tiempoCalc = r.diasTransito ? ` • ${r.diasTransito} días` : "";
+              fleteDetalle = `Flete 🚢 (Marítimo ${modalidad}): USD ${fmtUSD(fleteUSD)}${tiempoCalc}`;
+            }
           }
         }catch{}
 
@@ -1596,7 +1626,12 @@ if (s.step==="c_mar_origen"){
         } else if (s.modo==="maritimo"){
           if (s.maritimo_tipo==="LCL"){
             const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
-            const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad: "LCL", wm });
+            const r = await cotizarMaritimo({
+              origen: s.origen_puerto,
+              modalidad: "LCL",
+              wm,
+              m3: s.lcl_m3
+            });
             if (!r){
               await sendButtons(from,
                 "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
@@ -1608,7 +1643,10 @@ if (s.step==="c_mar_origen"){
               s.step = "waiting_retry";
               return res.sendStatus(200);
             }
-            const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
+            const tiempoTexto = r.diasTransito ? `⏱️ *Tiempo estimado:* ${r.diasTransito} días\n` : "";
+            const voluminosoTexto = r.esVoluminoso ? `⚠️ Tarifa voluminosa aplicada (5-10 m³)\n` : "";
+
+            const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n${voluminosoTexto}${tiempoTexto}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
           } else {
