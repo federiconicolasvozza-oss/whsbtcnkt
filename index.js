@@ -759,6 +759,64 @@ async function cotizarCourier({ pais, kg }) {
   return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact[col]), destino: "Ezeiza (EZE)" };
 }
 
+async function analizarConveniencia(s) {
+  const sugerencias = [];
+
+  if (s.maritimo_tipo === "LCL") {
+    const wm = Math.max(Number(s.lcl_tn) || 0, Number(s.lcl_m3) || 0);
+    if (wm > 20) {
+      sugerencias.push(
+        `💡 Con ${wm.toFixed(1)} W/M, te conviene un contenedor 40' completo (hasta 67m³). Puede ser más económico y tenés espacio exclusivo.`
+      );
+    } else if (wm > 10) {
+      sugerencias.push(
+        `💡 Tu carga ocupa ${wm.toFixed(1)} W/M. Un contenedor 20' completo puede costarte similar y te da hasta 33m³ exclusivos.`
+      );
+    }
+  }
+
+  if (s.maritimo_tipo === "LCL" && (Number(s.lcl_tn) || 0) > 15) {
+    sugerencias.push(
+      `⚠️ ${Number(s.lcl_tn)} toneladas supera el límite usual de LCL (15t). Te conviene FCL para evitar restricciones de manipulación.`
+    );
+  }
+
+  if (s.modo === "aereo" && s.aereo_tipo === "carga_general") {
+    const kg = Number(s.peso_kg) || 0;
+    if (kg > 2000) {
+      sugerencias.push(
+        `💡 ${kg} kg por aéreo puede ser muy costoso. Marítimo puede ahorrarte 60-70% del costo (con 30-35 días más de tránsito).`
+      );
+    } else if (kg > 1000) {
+      sugerencias.push(
+        `💡 Con ${kg} kg, marítimo puede ser significativamente más económico. Si no es urgente, puede valerte la pena.`
+      );
+    } else if (kg > 500) {
+      sugerencias.push(
+        `💡 ${kg} kg está en el límite. Si tu envío no es urgente, marítimo puede ahorrarte 40-50% del costo.`
+      );
+    }
+  }
+
+  if (s.modo === "aereo" && s.aereo_tipo === "carga_general") {
+    const pesoReal = Number(s.peso_kg) || 0;
+    const pesoVol = ((Number(s.vol_cbm) || 0) * 167);
+    if (pesoReal > 0 && pesoVol / pesoReal > 2.5) {
+      sugerencias.push(
+        `⚠️ Tu carga es liviana pero muy voluminosa. Aéreo cobra ${pesoVol.toFixed(0)} kg volumétricos vs ${pesoReal} kg reales. Marítimo puede ser mucho más económico.`
+      );
+    }
+  }
+
+  if (s.modo === "aereo" && s.aereo_tipo === "courier" && (Number(s.peso_kg) || 0) > 30) {
+    sugerencias.push(
+      `💡 Para más de 30 kg, carga aérea general suele ser 40-50% más económica que courier. ¿Querés que te cotice aéreo normal?`
+    );
+  }
+
+  return sugerencias.slice(0, 2);
+}
+
 /* ========= Estado ========= */
 const sessions = new Map();
 const emptyState = () => ({
@@ -1663,9 +1721,30 @@ if (s.step==="c_mar_origen"){
               s.step = "waiting_retry";
               return res.sendStatus(200);
             }
-            const texto = `✅ *Tarifa estimada (Marítimo ${modalidad})*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n*Origen:* ${s.origen_puerto}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
+            const partes = [
+              `✅ *Tarifa estimada (Marítimo ${modalidad})*`,
+              `USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.`,
+              `*Origen:* ${s.origen_puerto}`
+            ];
+            if (r.transit) {
+              partes.push(`⏱️ Tiempo estimado: ${r.transit}`);
+            }
+            partes.push(
+              "",
+              `*Validez:* ${VALIDEZ_DIAS} días`,
+              "*Nota:* No incluye impuestos ni gastos locales."
+            );
+            const texto = partes.join("\n");
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.origen_puerto}→${r.destino}`]);
+            const sugerencias = await analizarConveniencia(s);
+            if (sugerencias.length > 0) {
+              await sleep(500);
+              for (const sug of sugerencias) {
+                await sendText(from, sug);
+                await sleep(300);
+              }
+            }
           }
         } else if (s.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.origen_direccion || "" });
