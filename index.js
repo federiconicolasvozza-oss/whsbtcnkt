@@ -759,8 +759,6 @@ app.post("/webhook", async (req,res)=>{
       await sendImage(from, LOGO_URL, "");
       await sleep(400);
       await sendText(from, WELCOME_TEXT);
-      await sleep(450);
-      await sendText(from, WELCOME_TEXT);
       await sleep(400);
       if (!s.askedEmpresa) {
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
@@ -1268,10 +1266,6 @@ else if (btnId==="calc_go"){
 
     /* ===== TEXTO ===== */
     if (type==="text") {
-      if (s.step==="waiting_retry"){
-        await sendText(from, "Elegí una opción de los botones anteriores para continuar.");
-        return res.sendStatus(200);
-      }
       if (s.step==="ask_empresa"){
         s.empresa = text;
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
