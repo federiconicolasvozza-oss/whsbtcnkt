@@ -692,7 +692,7 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
     const mod  = norm(r[iMod]||"").replace(/\s+/g,"");
     const wantMod = norm(modalidad).replace(/\s+/g,"");
     const org = norm(r[iOrigen]||"");
-    return dest.includes("buenos aires") && mod===wantMod && (org===want || org.includes(want));
+    return dest.includes("buenos aires") && mod===wantMod && (org.includes(want) || want.includes(org));
   });
   if (!row) return null;
 
@@ -734,7 +734,10 @@ async function cotizarTerrestre({ origen }) {
   const iPrecio = headerIndex(header,"precio medio","precio usd medio","precio");
 
   const want = norm(origen);
-  const row = data.find(r => norm(r[iDest]).includes("buenos aires") && (norm(r[iOrigen])===want || norm(r[iOrigen]).includes(want)));
+  const row = data.find(r => {
+    const org = norm(r[iOrigen]||"");
+    return norm(r[iDest]).includes("buenos aires") && (org.includes(want) || want.includes(org));
+  });
   if (!row) return null;
   return { totalUSD: toNum(row[iPrecio]), destino: "Buenos Aires" };
 }
@@ -1673,7 +1676,7 @@ if (s.flow==="calc"){
           s.peso_kg = peso;
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
-if (s.step==="c_mar_origen"){
+if (s.step==="c_mar_origen" && s.flow==="calc"){
   await sendTypingIndicator(from, 2000);
   if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
     return res.sendStatus(200);
