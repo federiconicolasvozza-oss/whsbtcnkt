@@ -1676,7 +1676,7 @@ if (s.flow==="calc"){
           s.peso_kg = peso;
           s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
         }
-if (s.step==="c_mar_origen"){
+if (s.step==="c_mar_origen" && s.flow==="calc"){
   await sendTypingIndicator(from, 2000);
   if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
     return res.sendStatus(200);
