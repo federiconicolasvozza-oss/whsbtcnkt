@@ -621,7 +621,7 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
 /* ========= Cotizadores (tarifas) ========= */
 async function cotizarAereo({ origen, kg, vol }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos","aéreos","aereo"]);
-  if (!rows.length) throw new Error(`${TAB_AEREOS} vacío`);
+  if (!rows.length) throw new Error("Aereos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -676,8 +676,15 @@ async function verificarRutaAerea(origen) {
 }
 
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
-  if (!rows.length) throw new Error(`${TAB_MARITIMOS} vacío`);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  console.log("DEBUG Marítimos - TAB_MARITIMOS:", TAB_MAR_HINT);
+  console.log("DEBUG Marítimos - Filas leídas:", rows ? rows.length : "null");
+  console.log("DEBUG Marítimos - Primera fila (headers):", rows ? rows[0] : "sin datos");
+  if (!rows) {
+    console.error("DEBUG Marítimos - La pestaña está vacía o no existe");
+    return null;
+  }
+  if (!rows.length) throw new Error("Maritimos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -727,7 +734,7 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
 
 async function cotizarTerrestre({ origen }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_TERRESTRES, "A1:H10000", ["terrestres","terrestre"]);
-  if (!rows.length) throw new Error(`${TAB_TERRESTRES} vacío`);
+  if (!rows.length) throw new Error("Terrestres vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -744,7 +751,7 @@ async function cotizarTerrestre({ origen }) {
 
 async function cotizarCourier({ pais, kg }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
-  if (!rows.length) throw new Error(`${TAB_COURIER} vacío`);
+  if (!rows.length) throw new Error("Courier vacío");
   const header = rows[0], data = rows.slice(1);
   const iPeso = headerIndex(header,"peso","peso (kg)");
   const iAS   = headerIndex(header,"america sur");
@@ -1917,7 +1924,7 @@ function confirmCalc(to, d){
 // ✅ ÚNICA DEFINICIÓN
 async function cotizarCourierTarifas({ pais, kg }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
-  if (!rows.length) throw new Error(`${TAB_COURIER} vacío`);
+  if (!rows.length) throw new Error("Courier vacío");
 
   const header = rows[0], data = rows.slice(1);
   const iPeso = headerIndex(header, "peso", "peso (kg)");
