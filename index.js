@@ -676,7 +676,14 @@ async function verificarRutaAerea(origen) {
 }
 
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  console.log("DEBUG Marítimos - TAB_MARITIMOS:", TAB_MAR_HINT);
+  console.log("DEBUG Marítimos - Filas leídas:", rows ? rows.length : "null");
+  console.log("DEBUG Marítimos - Primera fila (headers):", rows ? rows[0] : "sin datos");
+  if (!rows) {
+    console.error("DEBUG Marítimos - La pestaña está vacía o no existe");
+    return null;
+  }
   if (!rows.length) throw new Error("Maritimos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
