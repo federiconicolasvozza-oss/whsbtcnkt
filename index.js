@@ -21,12 +21,12 @@ const API_VERSION = "v23.0";
 
 /* Tarifa Sheets (cotizador + matriz) */
 const TAR_SHEET_ID = (process.env.GOOGLE_TARIFFS_SHEET_ID || "").trim();
-const TAB_AER_HINT = (process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aereos").trim();
-const TAB_MAR_HINT = (process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Maritimos").trim();
-const TAB_TER_HINT = (process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
-const TAB_COU_HINT = (process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
-const TAB_CLASIF   = (process.env.GOOGLE_TARIFFS_TAB_CLASIFICACION || "Clasificación").trim();
-const TAB_LOCAL    = (process.env.GOOGLE_TARIFFS_TAB_FLETE_LOCAL || "Flete Local").trim();
+const TAB_AEREOS = (process.env.GOOGLE_TARIFFS_TAB_AEREOS || "Aéreos").trim();
+const TAB_MARITIMOS = (process.env.GOOGLE_TARIFFS_TAB_MARITIMOS || "Marítimos").trim();
+const TAB_TERRESTRES = (process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres").trim();
+const TAB_COURIER = (process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
+const TAB_CLASIFICACION = (process.env.GOOGLE_TARIFFS_TAB_CLASIFICACION || "Clasificación").trim();
+const TAB_LOCAL = (process.env.GOOGLE_TARIFFS_TAB_FLETE_LOCAL || "Flete Local").trim();
 
 const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB      = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
@@ -417,7 +417,7 @@ async function loadTransportCatalogs() {
   }
 
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos", "aéreos", "aereo"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos", "aéreos", "aereo"]);
     if (rows.length) {
       const header = rows[0];
       const data = rows.slice(1);
@@ -446,7 +446,7 @@ async function loadTransportCatalogs() {
   }
 
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos", "marítimos", "martimos", "mar"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:H10000", ["maritimos", "marítimos", "martimos", "mar"]);
     if (rows.length) {
       const header = rows[0];
       const data = rows.slice(1);
@@ -620,8 +620,8 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
 
 /* ========= Cotizadores (tarifas) ========= */
 async function cotizarAereo({ origen, kg, vol }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos","aéreos","aereo"]);
-  if (!rows.length) throw new Error("Aereos vacío");
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos","aéreos","aereo"]);
+  if (!rows.length) throw new Error(`${TAB_AEREOS} vacío`);
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -651,7 +651,7 @@ async function cotizarAereo({ origen, kg, vol }) {
 
 async function verificarRutaAerea(origen) {
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_AER_HINT, "A1:H10000", ["aereos","aéreos","aereo"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos","aéreos","aereo"]);
     if (!rows.length) return false;
 
     const header = rows[0], data = rows.slice(1);
@@ -676,8 +676,8 @@ async function verificarRutaAerea(origen) {
 }
 
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_MAR_HINT, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
-  if (!rows.length) throw new Error("Maritimos vacío");
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  if (!rows.length) throw new Error(`${TAB_MARITIMOS} vacío`);
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -726,8 +726,8 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
 }
 
 async function cotizarTerrestre({ origen }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_TER_HINT, "A1:H10000", ["terrestres","terrestre"]);
-  if (!rows.length) throw new Error("Terrestres vacío");
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_TERRESTRES, "A1:H10000", ["terrestres","terrestre"]);
+  if (!rows.length) throw new Error(`${TAB_TERRESTRES} vacío`);
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
   const iDest   = headerIndex(header,"destino");
@@ -743,8 +743,8 @@ async function cotizarTerrestre({ origen }) {
 }
 
 async function cotizarCourier({ pais, kg }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_COU_HINT, "A1:Z10000", ["courier"]);
-  if (!rows.length) throw new Error("Courier vacío");
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
+  if (!rows.length) throw new Error(`${TAB_COURIER} vacío`);
   const header = rows[0], data = rows.slice(1);
   const iPeso = headerIndex(header,"peso","peso (kg)");
   const iAS   = headerIndex(header,"america sur");
@@ -854,7 +854,7 @@ function getS(id){ if(!sessions.has(id)) sessions.set(id, { data: emptyState() }
 /* ========= Matriz (Clasificación dentro del mismo Sheet) ========= */
 async function readMatrix() {
   if (!TAR_SHEET_ID) return [];
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_CLASIF, "A1:Z2000", ["clasificacion","clasificación"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_CLASIFICACION, "A1:Z2000", ["clasificacion","clasificación"]);
   if (!rows.length) return [];
   const header = rows[0].map(h => (h||"").toString().trim());
   const find = (...lbl) => header.findIndex(h => lbl.map(x=>x.toLowerCase()).some(t => h.toLowerCase()===t || h.toLowerCase().includes(t)));
@@ -1693,7 +1693,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
           if (!r){
             await sendButtons(from,
-              "❌ No encontré esa ruta en *Aéreos*. ¿Qué querés hacer?",
+              `❌ No encontré esa ruta en *${TAB_AEREOS}*. ¿Qué querés hacer?`,
               [
                 { id:"retry_aer_origen", title:"🔄 Otro aeropuerto" },
                 { id:"menu_si", title:"🏠 Menú principal" }
@@ -1719,7 +1719,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           }
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
-          if (!r){ await sendText(from,"❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
           const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
@@ -1738,7 +1738,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           await sendText(from, "📧 ¿Deseás que te enviemos la cotización por correo?\nDejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
           return res.sendStatus(200);
         } else if (s.modo==="maritimo"){
-          if (s.maritimo_tipo==="LCL"){
+          if (s.maritimo_tipo==="LCL"){ 
             const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
             const r = await cotizarMaritimo({
               origen: s.origen_puerto,
@@ -1748,12 +1748,12 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
             });
             if (!r){
               await sendButtons(from,
-                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
-                [
-                  { id:"retry_mar_origen", title:"🔄 Otro puerto" },
-                  { id:"menu_si", title:"🏠 Menú principal" }
-                ]
-              );
+                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
+                  [
+                    { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                    { id:"menu_si", title:"🏠 Menú principal" }
+                  ]
+                );
               s.step = "waiting_retry";
               return res.sendStatus(200);
             }
@@ -1778,7 +1778,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
             if (!r){
               await sendButtons(from,
-                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
+                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
                 [
                   { id:"retry_mar_origen", title:"🔄 Otro puerto" },
                   { id:"menu_si", title:"🏠 Menú principal" }
@@ -1814,7 +1814,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           }
         } else if (s.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.origen_direccion || "" });
-          if (!r){ await sendText(from,"❌ No encontré esa ruta en *Terrestres*."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,`❌ No encontré esa ruta en *${TAB_TERRESTRES}*.`); return res.sendStatus(200); }
           const resp = `✅ *Tarifa estimada (TERRESTRE FTL)*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","terrestre", s.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.origen_direccion}→${r.destino}`]);
@@ -1916,8 +1916,8 @@ function confirmCalc(to, d){
 /* ========= Courier cotizador ========= */
 // ✅ ÚNICA DEFINICIÓN
 async function cotizarCourierTarifas({ pais, kg }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_COU_HINT, "A1:Z10000", ["courier"]);
-  if (!rows.length) throw new Error("Courier vacío");
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
+  if (!rows.length) throw new Error(`${TAB_COURIER} vacío`);
 
   const header = rows[0], data = rows.slice(1);
   const iPeso = headerIndex(header, "peso", "peso (kg)");
