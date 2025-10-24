@@ -1700,7 +1700,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
           if (!r){
             await sendButtons(from,
-              "❌ No encontré esa ruta en *Aéreos*. ¿Qué querés hacer?",
+              `❌ No encontré esa ruta en *${TAB_AEREOS}*. ¿Qué querés hacer?`,
               [
                 { id:"retry_aer_origen", title:"🔄 Otro aeropuerto" },
                 { id:"menu_si", title:"🏠 Menú principal" }
@@ -1726,7 +1726,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           }
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
-          if (!r){ await sendText(from,"❌ No pude calcular *Courier*. Revisá la pestaña."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
           const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
@@ -1745,7 +1745,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           await sendText(from, "📧 ¿Deseás que te enviemos la cotización por correo?\nDejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
           return res.sendStatus(200);
         } else if (s.modo==="maritimo"){
-          if (s.maritimo_tipo==="LCL"){
+          if (s.maritimo_tipo==="LCL"){ 
             const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
             const r = await cotizarMaritimo({
               origen: s.origen_puerto,
@@ -1755,12 +1755,12 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
             });
             if (!r){
               await sendButtons(from,
-                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
-                [
-                  { id:"retry_mar_origen", title:"🔄 Otro puerto" },
-                  { id:"menu_si", title:"🏠 Menú principal" }
-                ]
-              );
+                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
+                  [
+                    { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                    { id:"menu_si", title:"🏠 Menú principal" }
+                  ]
+                );
               s.step = "waiting_retry";
               return res.sendStatus(200);
             }
@@ -1785,7 +1785,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
             if (!r){
               await sendButtons(from,
-                "❌ No encontré esa ruta en *Marítimos*. ¿Qué querés hacer?",
+                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
                 [
                   { id:"retry_mar_origen", title:"🔄 Otro puerto" },
                   { id:"menu_si", title:"🏠 Menú principal" }
@@ -1821,7 +1821,7 @@ if (s.step==="c_mar_origen" && s.flow==="calc"){
           }
         } else if (s.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.origen_direccion || "" });
-          if (!r){ await sendText(from,"❌ No encontré esa ruta en *Terrestres*."); return res.sendStatus(200); }
+          if (!r){ await sendText(from,`❌ No encontré esa ruta en *${TAB_TERRESTRES}*.`); return res.sendStatus(200); }
           const resp = `✅ *Tarifa estimada (TERRESTRE FTL)*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","terrestre", s.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.origen_direccion}→${r.destino}`]);
