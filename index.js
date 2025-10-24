@@ -417,7 +417,7 @@ async function loadTransportCatalogs() {
   }
 
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos", "aéreos", "aereo"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:Z10000", ["aereos", "aéreos", "aereo"]);
     if (rows.length) {
       const header = rows[0];
       const data = rows.slice(1);
@@ -446,7 +446,7 @@ async function loadTransportCatalogs() {
   }
 
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:H10000", ["maritimos", "marítimos", "martimos", "mar"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:Z10000", ["maritimos", "marítimos", "martimos", "mar"]);
     if (rows.length) {
       const header = rows[0];
       const data = rows.slice(1);
@@ -620,7 +620,7 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
 
 /* ========= Cotizadores (tarifas) ========= */
 async function cotizarAereo({ origen, kg, vol }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos","aéreos","aereo"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:Z10000", ["aereos","aéreos","aereo"]);
   if (!rows.length) throw new Error("Aereos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
@@ -651,7 +651,7 @@ async function cotizarAereo({ origen, kg, vol }) {
 
 async function verificarRutaAerea(origen) {
   try {
-    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:H10000", ["aereos","aéreos","aereo"]);
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:Z10000", ["aereos","aéreos","aereo"]);
     if (!rows.length) return false;
 
     const header = rows[0], data = rows.slice(1);
@@ -675,7 +675,7 @@ async function verificarRutaAerea(origen) {
   }
 }
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
-  const rows = await readTabRange(TAR_SHEET_ID, "A1:H10000", ["maritimos","marítimos","martimos","mar"]);
+  const rows = await readTabRange(TAR_SHEET_ID, "A1:Z10000", ["maritimos","marítimos","martimos","mar"]);
   console.log("DEBUG Marítimos - TAB_MARITIMOS:");
   console.log("DEBUG Marítimos - Filas leídas:", rows ? rows.length : "null");
   console.log("DEBUG Marítimos - Primera fila (headers):", rows ? rows[0] : "sin datos");
@@ -732,7 +732,7 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
 }
 
 async function cotizarTerrestre({ origen }) {
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_TERRESTRES, "A1:H10000", ["terrestres","terrestre"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_TERRESTRES, "A1:Z10000", ["terrestres","terrestre"]);
   if (!rows.length) throw new Error("Terrestres vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
@@ -860,7 +860,7 @@ function getS(id){ if(!sessions.has(id)) sessions.set(id, { data: emptyState() }
 /* ========= Matriz (Clasificación dentro del mismo Sheet) ========= */
 async function readMatrix() {
   if (!TAR_SHEET_ID) return [];
-  const rows = await readTabRange(TAR_SHEET_ID, TAB_CLASIFICACION, "A1:Z2000", ["clasificacion","clasificación"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_CLASIFICACION, "A1:Z10000", ["clasificacion","clasificación"]);
   if (!rows.length) return [];
   const header = rows[0].map(h => (h||"").toString().trim());
   const find = (...lbl) => header.findIndex(h => lbl.map(x=>x.toLowerCase()).some(t => h.toLowerCase()===t || h.toLowerCase().includes(t)));
