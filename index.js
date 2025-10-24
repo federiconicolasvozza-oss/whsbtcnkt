@@ -446,6 +446,8 @@ async function loadTransportCatalogs() {
   }
 
   try {
+    console.log("DEBUG cotizarMaritimo - TAB_MARITIMOS:", TAB_MARITIMOS);
+console.log("DEBUG cotizarMaritimo - Tipo de TAB_MARITIMOS:", typeof TAB_MARITIMOS);
     const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:Z10000", ["maritimos", "marítimos", "martimos", "mar"]);
     if (rows.length) {
       const header = rows[0];
@@ -1969,6 +1971,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
