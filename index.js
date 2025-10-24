@@ -294,8 +294,8 @@ const endFlow = async (to) => {
 
 /* ========= Tabs ========= */
 const tabCache = new Map();
-async function resolveTabTitle(sheetId, hint, extras = []) {
-  const n = norm(hint);
+async function resolveTabTitle(sheetId, tabName, tags = []) {
+  const n = norm(tabName);
   if (!tabCache.has(sheetId)) {
     const meta = await sheetsClient().spreadsheets.get({ spreadsheetId: sheetId, fields: "sheets(properties(title))" });
     const map = {};
@@ -308,7 +308,7 @@ async function resolveTabTitle(sheetId, hint, extras = []) {
   const map = tabCache.get(sheetId);
   const entries = Object.entries(map);
   if (map[n]) return map[n];
-  const tryList = [n, ...extras.map(norm)];
+  const tryList = [n, ...tags.map(norm)];
   for (const q of tryList) {
     const exact = entries.find(([k])=>k===q); if (exact) return exact[1];
     const starts= entries.find(([k])=>k.startsWith(q)); if (starts) return starts[1];
@@ -318,7 +318,7 @@ async function resolveTabTitle(sheetId, hint, extras = []) {
     const alt = entries.find(([k])=>k.startsWith("martim") || k.startsWith("marit"));
     if (alt) return alt[1];
   }
-  throw new Error(`No pude encontrar la pestaña "${hint}".`);
+  throw new Error(`No pude encontrar la pestaña "${tabName}".`);
 }
 async function readTabRange(sheetId, tabName, range, tags = []) {
   const title = await resolveTabTitle(sheetId, tabName, tags);
