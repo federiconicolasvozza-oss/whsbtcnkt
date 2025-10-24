@@ -320,11 +320,11 @@ async function resolveTabTitle(sheetId, hint, extras = []) {
   }
   throw new Error(`No pude encontrar la pestaña "${hint}".`);
 }
-async function readTabRange(sheetId, tabHint, a1Core, extras=[]) {
-  const title = await resolveTabTitle(sheetId, tabHint, extras);
-  const range = `'${title}'!${a1Core}`;
-  const r = await sheetsClient().spreadsheets.values.get({ spreadsheetId: sheetId, range });
-  return r.data.values || [];
+async function readTabRange(sheetId, tabName, range, tags = []) {
+  const title = await resolveTabTitle(sheetId, tabName, tags);
+  const rangeA1 = `'${title}'!${range}`;
+  const res = await sheetsClient().spreadsheets.values.get({ spreadsheetId: sheetId, range: rangeA1 });
+  return res.data.values || [];
 }
 
 /* ========= LOG ========= */
