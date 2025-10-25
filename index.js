@@ -30,6 +30,7 @@ const TAB_LOCAL = (process.env.GOOGLE_TARIFFS_TAB_FLETE_LOCAL || "Flete Local").
 
 const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB      = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
+const TAB_USUARIOS = (process.env.GOOGLE_LOG_TAB_USUARIOS || "Usuarios").trim();
 const TAB_CALCULOS = (process.env.GOOGLE_CALC_TAB || "calculos").trim();
 
 const AEREO_MIN_KG = Number(process.env.AEREO_MIN_KG ?? 100);
@@ -474,6 +475,38 @@ console.log("DEBUG cotizarMaritimo - Tipo de TAB_MARITIMOS:", typeof TAB_MARITIM
   console.log(`📚 Catálogos cargados: ✈️ ${AIRPORT_CATALOG.length} aeropuertos, 🚢 ${SEAPORT_CATALOG.length} puertos.`);
 }
 
+// Guardar empresa del usuario
+async function saveUserEmpresa(telefono, empresa) {
+  try {
+    const timestamp = new Date().toISOString().split("T")[0];
+    await sheetsClient().spreadsheets.values.append({
+      spreadsheetId: LOG_SHEET_ID,
+      range: `${TAB_USUARIOS}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[telefono, empresa, timestamp]] }
+    });
+    console.log(`✅ Empresa guardada: ${telefono} → ${empresa}`);
+  } catch (e) {
+    console.error("saveUserEmpresa error", e?.message || e);
+  }
+}
+
+// Recuperar empresa del usuario
+async function getUserEmpresa(telefono) {
+  try {
+    const rows = await sheetsClient().spreadsheets.values.get({
+      spreadsheetId: LOG_SHEET_ID,
+      range: `${TAB_USUARIOS}!A:B`
+    });
+    const data = rows.data.values || [];
+    const row = data.find(r => r[0] === telefono);
+    return row ? row[1] : null;
+  } catch (e) {
+    console.error("getUserEmpresa error", e?.message || e);
+    return null;
+  }
+}
+
 async function resolveFuzzySelection(from, s, action, value) {
   const chosen = (value || "").toString().trim();
   if (!chosen) return;
@@ -857,7 +890,18 @@ const emptyState = () => ({
   // flete local
   local_cap:null, local_tipo:null, local_dist:null,
 });
-function getS(id){ if(!sessions.has(id)) sessions.set(id, { data: emptyState() }); return sessions.get(id); }
+async function getS(id){
+  if(!sessions.has(id)) {
+    sessions.set(id, { data: { ...emptyState() } });
+    // Cargar empresa guardada ANTES de continuar
+    const empresa = await getUserEmpresa(id);
+    if (empresa) {
+      const s = sessions.get(id);
+      if (s) s.data.empresa = empresa;
+    }
+  }
+  return sessions.get(id);
+}
 
 /* ========= Matriz (Clasificación dentro del mismo Sheet) ========= */
 async function readMatrix() {
@@ -945,7 +989,7 @@ app.post("/webhook", async (req,res)=>{
     if (!msg) return res.sendStatus(200);
 
     const from  = msg.from;
-    const s     = getS(from).data;
+    const { data: s } = await getS(from);
     const type  = msg.type;
     const text  = (type==="text") ? (msg.text?.body || "").trim() : "";
     const lower = norm(text);
@@ -971,7 +1015,7 @@ app.post("/webhook", async (req,res)=>{
 
     // Comandos globales
     if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
-      if (lower==="inicio" || lower==="reset") { sessions.delete(from); getS(from); }
+      if (lower==="inicio" || lower==="reset") { sessions.delete(from); await getS(from); }
       await sendMainActions(from);
       return res.sendStatus(200);
     }
@@ -1509,6 +1553,7 @@ else if (btnId==="calc_go"){
     if (type==="text") {
       if (s.step==="ask_empresa"){
         s.empresa = text;
+        await saveUserEmpresa(from, text);
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
         await sendMainActions(from);
         s.step="main";
