@@ -677,7 +677,7 @@ async function verificarRutaAerea(origen) {
   }
 }
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
-  const rows = await readTabRange(TAR_SHEET_ID, "A1:Z10000", ["maritimos","marítimos","martimos","mar"]);
+  const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:Z10000", ["maritimos","marítimos","martimos","mar"]);
   console.log("DEBUG Marítimos - TAB_MARITIMOS:");
   console.log("DEBUG Marítimos - Filas leídas:", rows ? rows.length : "null");
   console.log("DEBUG Marítimos - Primera fila (headers):", rows ? rows[0] : "sin datos");
@@ -1971,6 +1971,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
