@@ -890,15 +890,16 @@ const emptyState = () => ({
   // flete local
   local_cap:null, local_tipo:null, local_dist:null,
 });
-async function getS(id){
+function getS(id){
   if(!sessions.has(id)) {
     sessions.set(id, { data: { ...emptyState() } });
-    // Cargar empresa guardada ANTES de continuar
-    const empresa = await getUserEmpresa(id);
-    if (empresa) {
-      const s = sessions.get(id);
-      if (s) s.data.empresa = empresa;
-    }
+    // Cargar empresa guardada
+    getUserEmpresa(id).then(empresa => {
+      if (empresa) {
+        const s = sessions.get(id);
+        if (s) s.data.empresa = empresa;
+      }
+    });
   }
   return sessions.get(id);
 }
