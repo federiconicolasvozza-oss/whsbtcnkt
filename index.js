@@ -990,7 +990,7 @@ app.post("/webhook", async (req,res)=>{
     if (!msg) return res.sendStatus(200);
 
     const from  = msg.from;
-    const s     = getS(from).data;
+    const { data: s } = await getS(from);
     const type  = msg.type;
     const text  = (type==="text") ? (msg.text?.body || "").trim() : "";
     const lower = norm(text);
@@ -1016,7 +1016,7 @@ app.post("/webhook", async (req,res)=>{
 
     // Comandos globales
     if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
-      if (lower==="inicio" || lower==="reset") { sessions.delete(from); getS(from); }
+      if (lower==="inicio" || lower==="reset") { sessions.delete(from); await getS(from); }
       await sendMainActions(from);
       return res.sendStatus(200);
     }
