@@ -237,6 +237,8 @@ const WELCOME_TEXT =
   "⚠️ Cotizaciones orientativas, no reemplazan confirmación formal.\n\n" +
   "Escribí *menu* para volver al inicio.";
 
+const WELCOME_DELAY_MS = 400;
+
 const sendMainActions = async (to) => {
   return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
     { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
@@ -1001,9 +1003,9 @@ app.post("/webhook", async (req,res)=>{
       if (s.welcomed) return;
       s.welcomed = true;
       await sendImage(from, LOGO_URL, "");
-      await sleep(400);
+      await sleep(WELCOME_DELAY_MS);
       await sendText(from, WELCOME_TEXT);
-      await sleep(400);
+      await sleep(WELCOME_DELAY_MS);
       if (!s.askedEmpresa) {
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
         s.step = "ask_empresa";
