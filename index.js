@@ -44,6 +44,33 @@ const INSURANCE_RATE   = Number(process.env.INSURANCE_RATE   ?? 0.01);
 const TASA_ESTATISTICA = Number(process.env.TASA_ESTATISTICA ?? 0.03);
 const RATE_IIGG        = Number(process.env.RATE_IIGG        ?? 0.06);
 
+/* Sistema de clasificación automática */
+const UMBRAL_CONFIANZA = {
+  AUTO_CLASIFICAR: 20,      // Score >= 20 → Clasifica directo
+  MOSTRAR_OPCIONES: 15,     // Score >= 15 → Muestra con confirmación
+  ESCALAR_ASESOR: 0         // Score < 15 → Escala a humano
+};
+
+const PUNTOS_MATCH = {
+  MATCH_EXACTO: 10,         // Palabra exacta en TAG
+  MATCH_PARCIAL: 5,         // Substring en TAG
+  MATCH_FUZZY_85: 3,        // Similitud >= 85%
+  MATCH_FUZZY_70: 1         // Similitud >= 70%
+};
+
+// Whitelist de dominios permitidos para links
+const DOMINIOS_PERMITIDOS = [
+  'mercadolibre.com.ar', 'mercadolibre.com', 'mercadolibre.com.mx',
+  'aliexpress.com', 'aliexpress.us',
+  'amazon.com', 'amazon.com.br', 'amazon.es', 'amazon.com.mx',
+  'alibaba.com',
+  'ebay.com', 'ebay.com.ar',
+  // Fabricantes conocidos
+  'sony.com', 'samsung.com', 'lg.com', 'apple.com',
+  'nike.com', 'adidas.com', 'puma.com',
+  'lenovo.com', 'dell.com', 'hp.com', 'asus.com'
+];
+
 let AIRPORT_CATALOG = [];
 let SEAPORT_CATALOG = [];
 let fuseAirports = null;
@@ -538,6 +565,10 @@ async function resolveFuzzySelection(from, s, action, value) {
     s.origen_puerto = chosen;
     s.step = "c_confirm";
     await confirmCalc(from, s);
+  } else if (action === "c_aer_origen") {
+    s.origen_aeropuerto = chosen;
+    s.step = "c_confirm";
+    await confirmCalc(from, s);
   }
 }
 
@@ -865,6 +896,215 @@ async function analizarConveniencia(s) {
   return sugerencias.slice(0, 2);
 }
 
+/* ========= Clasificación automática de productos ========= */
+
+// Función para calcular similitud entre strings (Levenshtein simplificado)
+function similarity(a, b) {
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  if (longer.length === 0) return 1.0;
+  const editDistance = levenshteinDistance(longer, shorter);
+  return (longer.length - editDistance) / longer.length;
+}
+
+function levenshteinDistance(a, b) {
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+// Extrae palabras clave de un texto (elimina stopwords comunes)
+function extraerPalabrasClave(texto) {
+  const stopwords = ['el', 'la', 'de', 'en', 'un', 'una', 'para', 'con', 'por', 'del', 'los', 'las', 'y', 'o', 'que'];
+  const palabras = norm(texto)
+    .split(/[\s,;.]+/)
+    .filter(p => p.length > 2 && !stopwords.includes(p));
+  return [...new Set(palabras)];
+}
+
+// Busca producto en la planilla MATRIZ por TAGS
+async function buscarProductoEnTags(palabrasClave) {
+  try {
+    const M = await getMatrix();
+    if (!M || M.length === 0) {
+      console.log("DEBUG buscarProductoEnTags: Matriz vacía");
+      return [];
+    }
+
+    const resultados = [];
+
+    for (const fila of M) {
+      const tags = norm(fila.TAGS || "").split(/[,\s]+/).filter(Boolean);
+      if (tags.length === 0) continue;
+
+      let score = 0;
+      let matches = [];
+
+      for (const palabra of palabrasClave) {
+        const pNorm = norm(palabra);
+
+        // Match exacto
+        if (tags.includes(pNorm)) {
+          score += PUNTOS_MATCH.MATCH_EXACTO;
+          matches.push(palabra);
+          continue;
+        }
+
+        // Match parcial (substring)
+        if (tags.some(t => t.includes(pNorm) || pNorm.includes(t))) {
+          score += PUNTOS_MATCH.MATCH_PARCIAL;
+          matches.push(palabra);
+          continue;
+        }
+
+        // Match fuzzy
+        for (const tag of tags) {
+          const sim = similarity(pNorm, tag);
+          if (sim >= 0.85) {
+            score += PUNTOS_MATCH.MATCH_FUZZY_85;
+            matches.push(palabra);
+            break;
+          } else if (sim >= 0.70) {
+            score += PUNTOS_MATCH.MATCH_FUZZY_70;
+            break;
+          }
+        }
+      }
+
+      if (score > 0) {
+        resultados.push({
+          fila,
+          score,
+          matches: [...new Set(matches)],
+          categoria: fila.SUB || fila.NIV3 || fila.NIV2 || "",
+          clasificacion: [fila.NIV1, fila.NIV2, fila.NIV3].filter(Boolean).join(" → ")
+        });
+      }
+    }
+
+    // Ordenar por score descendente
+    resultados.sort((a, b) => b.score - a.score);
+
+    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${resultados[0]?.score || 0}`);
+
+    return resultados;
+  } catch (err) {
+    console.error("ERROR buscarProductoEnTags:", err);
+    return [];
+  }
+}
+
+// Extrae info de producto desde una URL
+async function extraerInfoDesdeURL(url) {
+  try {
+    // Validar formato de URL
+    let urlObj;
+    try {
+      urlObj = new URL(url);
+    } catch {
+      return { error: "URL_INVALIDA", mensaje: "El link no es válido. Asegurate de copiar el link completo." };
+    }
+
+    // Validar dominio permitido
+    const dominio = urlObj.hostname.toLowerCase().replace(/^www\./, '');
+    const permitido = DOMINIOS_PERMITIDOS.some(d => dominio === d || dominio.endsWith('.' + d));
+
+    if (!permitido) {
+      return {
+        error: "DOMINIO_NO_PERMITIDO",
+        mensaje: `⚠️ No reconozco ese sitio web.\n\nPor seguridad, solo analizo links de:\n• MercadoLibre\n• AliExpress\n• Amazon\n• Alibaba\n• eBay\n• Páginas del fabricante verificadas`
+      };
+    }
+
+    // Timeout de 10 segundos
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; ConektarBot/1.0)'
+      }
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return {
+        error: "NO_ACCESIBLE",
+        mensaje: "❌ No pude acceder a ese link.\n\nPuede que:\n• El producto ya no exista\n• El link esté incompleto\n• El sitio no responda"
+      };
+    }
+
+    const html = await response.text();
+
+    // Usar Claude para extraer info del HTML (simulado con análisis básico por ahora)
+    // En producción, esto usaría Claude API para analizar el HTML
+    const titulo = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
+    const descripcion = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)?.[1] || "";
+
+    const textoCompleto = titulo + " " + descripcion;
+    const palabrasClave = extraerPalabrasClave(textoCompleto);
+
+    if (palabrasClave.length === 0) {
+      return {
+        error: "SIN_INFO_UTIL",
+        mensaje: "🔍 Abrí el link pero no encontré info del producto.\n\nEsto pasa cuando:\n• La página requiere login\n• El producto está sin stock\n• No hay descripción disponible"
+      };
+    }
+
+    return {
+      ok: true,
+      titulo: titulo.substring(0, 100),
+      palabrasClave,
+      url
+    };
+
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return {
+        error: "TIMEOUT",
+        mensaje: "⏱️ El sitio tardó demasiado en responder. Intentá de nuevo o probá con otro método."
+      };
+    }
+
+    console.error("ERROR extraerInfoDesdeURL:", err);
+    return {
+      error: "ERROR_GENERICO",
+      mensaje: "❌ Hubo un error al analizar el link. Probá con otro método."
+    };
+  }
+}
+
+// Analiza una imagen de producto (placeholder - requiere Claude API)
+async function analizarImagenProducto(imagenUrl) {
+  // TODO: Implementar con Claude Vision API
+  // Por ahora retorna un placeholder
+  return {
+    ok: false,
+    error: "NO_IMPLEMENTADO",
+    mensaje: "📸 El análisis de imágenes estará disponible próximamente. Por favor, usá la descripción o link del producto."
+  };
+}
+
 /* ========= Estado ========= */
 const sessions = new Map();
 const emptyState = () => ({
@@ -964,10 +1204,13 @@ function distinct(arr, keyFn){
 
 /* ========= UI calculadora ========= */
 const askProdMetodo = (to) => sendButtons(to,
-  "Sobre tu producto, ¿preferís *Descripción*, *Categoría* o ver *Populares*?",
-  [{ id:"calc_desc", title:"📝 Descrip." },{ id:"calc_cat",  title:"📂 Categoría" },{ id:"calc_pop",  title:"⭐ Populares" }]
+  "¿Cómo querés buscar tu producto?",
+  [
+    { id:"calc_link_desc", title:"🔗📝 Link o Descripción" },
+    { id:"calc_foto",      title:"📸 Cargar imagen/foto" },
+    { id:"calc_cat",       title:"📂 Buscar por categoría" }
+  ]
 );
-const populares = ["🧱 Materiales","🪛 Ferreteria","🧬Biotecnolgía","🚙 Vehículos","🖥️ Componentes PC","🧪Químicos"];
 const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({
   id:`${pref}_${i}`,
   title: clip24(t)
@@ -1177,7 +1420,24 @@ app.post("/webhook", async (req,res)=>{
       }
 
       // ===== Calculadora (árbol + búsqueda)
-      else if (btnId==="calc_desc"){ s.step="calc_desc_wait"; await sendText(from,"Escribí una *breve descripción* (p.ej., “químicos”, “memorias RAM”)."); }
+      else if (btnId==="calc_link_desc"){
+        s.step="calc_link_desc_wait";
+        await sendText(from,"🔗📝 Pegá el *link del producto* o escribí una *descripción*\n\nEjemplos:\n• https://www.aliexpress.com/item/...\n• termo stanley 1 litro\n• auriculares bluetooth sony");
+      }
+      else if (btnId==="calc_foto"){
+        await sendText(from,"📸 *Enviá una foto de tu producto*\n\n💡 Consejos:\n✓ Que se vea clara\n✓ Con buena luz\n✓ De frente o con etiquetas visibles");
+        s.step="calc_foto_wait";
+      }
+      else if (btnId==="calc_clasif_ok"){
+        // Usuario confirmó la clasificación
+        s.step="calc_fob_unit";
+        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+      }
+      else if (btnId==="calc_clasif_cambiar"){
+        // Usuario quiere cambiar la clasificación
+        await askProdMetodo(from);
+        s.step="calc_prod_m";
+      }
      else if (btnId==="calc_cat"){
   const M = await getMatrix(); 
   const V = indexMatrix(M);
@@ -1302,53 +1562,6 @@ else if (/^sub_\d+$/.test(btnId) && s.step === "calc_sub_pick") {
   await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
   return res.sendStatus(200);
 }
-else if (btnId === "calc_pop") {
-  const M = await getMatrix();
-  const directMatches = [
-    M.find(x => norm(x.NIV2).includes("ferreteria")),
-    M.find(x => norm(x.NIV3).includes("herramienta")),
-    M.find(x => norm(x.SUB).includes("quimico")),
-    M.find(x => norm(x.NIV2).includes("maquinaria")),
-    M.find(x => norm(x.SUB).includes("vehiculo")),
-  ].filter(Boolean);
-  
-  if (!directMatches.length) {
-    await sendText(from, "No encontré productos populares. Usá 'Categoría' o 'Descripción'.");
-    return res.sendStatus(200);
-  }
-  
-  const opciones = directMatches.map((m,i) => ({
-    id: `pop_direct_${i}`,
-    title: clip24(m.SUB || m.NIV3),
-    description: `${m.NIV1} > ${m.NIV2}`
-  }));
-
-  s._popMatches = directMatches;
-  await sendList(from, "⭐ Productos populares:", opciones, "Populares", "Elegir");
-  s.step = "calc_pop_direct_pick";
-}
-else if (/^pop_direct_\d+$/.test(btnId) && s.step === "calc_pop_direct_pick") {
-  const index = Number(btnId.split("_").pop());
-  const fila = Array.isArray(s._popMatches) ? s._popMatches[index] : undefined;
-
-  if (!fila) {
-    await sendText(from, "⚠️ No encontré datos para este producto. Escribí 'menu' para volver.");
-    s.step = "start";
-    return res.sendStatus(200);
-  }
-
-  const categoria = fila.SUB || fila.NIV3 || fila.NIV2 || "";
-  const descripcion = (fila.NIV3 && fila.SUB)
-    ? `${fila.NIV3} / ${fila.SUB}`
-    : categoria;
-  s.matriz = fila;
-  s.categoria = categoria;
-  s.producto_desc = descripcion;
-
-  s.step = "calc_fob_unit";
-  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-  return res.sendStatus(200);
-}
 // búsqueda libre picks
 else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
   const title = msg.interactive?.list_reply?.title;
@@ -1369,7 +1582,11 @@ else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
 
 // Modo de transporte (calculadora)
 else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
-else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_confirm"; await confirmCalc(from, s); }
+else if (btnId==="c_aereo"){
+  s.calc_modo="aereo";
+  s.step="c_aer_origen";
+  await sendText(from, "✈️ *Aeropuerto de ORIGEN*\n\nEjemplos:\n• Shanghai / PVG\n• Miami / MIA\n• Frankfurt / FRA\n\nEscribí el código IATA o ciudad:");
+}
 else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo)."); }
 else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
 else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
@@ -1421,6 +1638,7 @@ else if (btnId==="calc_go"){
 `FOB total: USD ${fmtUSD(s.fob_total)} (${s.cantidad||0} u. × ${fmtUSD(s.fob_unit||0)})`,
 `${fleteDetalle || "Flete: *sin tarifa* (seguimos el cálculo y te contactamos)"}`,
 `Seguro (${(INSURANCE_RATE*100).toFixed(1)}%): USD ${fmtUSD(insurance)}`,
+"━━━━━━━━━━━━━━━",
 `CIF: USD ${fmtUSD(cif)}`,
 "",
 "🏛️ *Impuestos*",
@@ -1430,8 +1648,9 @@ else if (btnId==="calc_go"){
 `IVA Adic. (${((M.iva_ad||0)*100).toFixed(1)}%): USD ${fmtUSD(ivaAd)}`,
 `IIBB (${((M.iibb||0)*100).toFixed(1)}%): USD ${fmtUSD(iibb)}`,
 `IIGG (${((M.iigg??RATE_IIGG)*100).toFixed(1)}%): USD ${fmtUSD(iigg)}` + ((M.internos||0)>0?`\nInternos (${(M.internos*100).toFixed(1)}%): USD ${fmtUSD(internos)}`:""),
+"━━━━━━━━━━━━━━━",
+`📊 Total impuestos: USD ${fmtUSD(impTotal)}`,
 "",
-`📊 *Total impuestos:* USD ${fmtUSD(impTotal)}`,
 "💰 *Costo final (CIF + imp.)*",
 `Costo aduanero: USD ${fmtUSD(costoAdu)}`,
 "",
@@ -1440,7 +1659,7 @@ else if (btnId==="calc_go"){
 "",
 "📝 *Notas:*",
 ...(M.nota? M.nota.split("\n").map(x=>"* "+x.trim()) : []),
-"* _No contempla gastos locales (liberación, despachante, almacenaje, etc.)._"
+"* No contempla gastos locales (liberación, despachante, almacenaje, etc.)."
 ].join("\n");
 
         await sendText(from, body);
@@ -1674,28 +1893,109 @@ if (s.flow==="calc"){
     }
   }
 }    // ← acá hoy solo hay *un* cierre
-        if (s.step==="calc_desc_wait"){
-          await sendTypingIndicator(from, 2000);
+        if (s.step==="calc_link_desc_wait"){
+          await sendTypingIndicator(from, 3000);
 
-          const query = text;
-          const M = await getMatrix();
-          const V = indexMatrix(M);
-          const n3Matches = distinct(
-            V.filter(x => norm(x.niv3).includes(norm(query)) || norm(x.sub).includes(norm(query))),
-            x => x.niv3
-          ).filter(Boolean);
+          let palabrasClave = [];
+          let esLink = false;
 
-          if (!n3Matches.length){
-            s.matriz = M[0] || { di:0, iva:0.21, iva_ad:0, iibb:0.035, iigg:RATE_IIGG, internos:0, tasa_est:TASA_ESTATISTICA };
-            s.producto_desc = query;
-            s.step="calc_fob_unit";
-            await sendText(from,"No encontré coincidencias claras. Uso categoría genérica.\n\n💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+          // Detectar si es un link o descripción
+          if (text.startsWith('http://') || text.startsWith('https://')) {
+            // Es un link
+            esLink = true;
+            await sendText(from, "🔍 Analizando el link...");
+
+            const resultado = await extraerInfoDesdeURL(text);
+
+            if (resultado.error) {
+              await sendText(from, resultado.mensaje);
+              await sendButtons(from, "¿Querés intentar de otra forma?", [
+                { id:"calc_link_desc", title:"🔄 Reintentar" },
+                { id:"calc_cat", title:"📂 Buscar por categoría" },
+                { id:"menu_si", title:"🏠 Menú principal" }
+              ]);
+              s.step = "waiting_retry";
+              return res.sendStatus(200);
+            }
+
+            palabrasClave = resultado.palabrasClave;
+            s.producto_desc = resultado.titulo || text;
           } else {
-            const rows = listFrom(n3Matches,"n3s");
-            s._find = { V, n3Matches };
-            await sendList(from, "Elegí *Nivel 3: Categoría*:", rows, "Nivel 3: Categoría", "Elegir");
-            s.step = "calc_find_n3_pick";
+            // Es una descripción
+            palabrasClave = extraerPalabrasClave(text);
+            s.producto_desc = text;
           }
+
+          // Buscar en TAGS
+          const resultados = await buscarProductoEnTags(palabrasClave);
+
+          if (resultados.length === 0 || resultados[0].score < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES) {
+            // ESCALAR A ASESOR - Score muy bajo
+            s.step = "waiting_asesor";
+            await sendText(from,
+              `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
+              `⚠️ No encontré una categoría clara para este producto.\n\n` +
+              `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+              `Datos registrados:\n` +
+              `━━━━━━━━━━━━━━━\n` +
+              `📦 Producto: ${s.producto_desc}\n` +
+              `🏢 Empresa: ${s.empresa || "No especificada"}\n` +
+              `📅 Fecha: ${new Date().toLocaleDateString()}\n` +
+              `━━━━━━━━━━━━━━━`
+            );
+            await sendButtons(from, "También podés:", [
+              { id:"calc_cat", title:"📂 Buscar por categoría" },
+              { id:"menu_si", title:"🏠 Volver al menú" }
+            ]);
+            await logSolicitud([
+              new Date().toISOString(),
+              from,
+              "",
+              s.empresa,
+              "whatsapp",
+              "escalar_asesor",
+              "",
+              "",
+              "",
+              "",
+              "",
+              `Producto no clasificado: ${s.producto_desc}`
+            ]);
+            return res.sendStatus(200);
+          }
+
+          // Mejor resultado
+          const mejor = resultados[0];
+          s.matriz = mejor.fila;
+          s.categoria = mejor.categoria;
+          s.sel_n1 = mejor.fila.NIV1;
+          s.sel_n2 = mejor.fila.NIV2;
+          s.sel_n3 = mejor.fila.NIV3;
+
+          // Construir mensaje según el score
+          let mensaje = "";
+          if (mejor.score >= UMBRAL_CONFIANZA.AUTO_CLASIFICAR) {
+            // Score alto - Auto-clasificar con confirmación
+            mensaje =
+              `✅ *Encontré la categoría:* ${mejor.categoria}\n\n` +
+              `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
+              `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
+              `¿Es correcto?`;
+          } else {
+            // Score medio - Mostrar con confirmación
+            mensaje =
+              `✅ *Encontré:* ${mejor.categoria}\n\n` +
+              `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
+              `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
+              `¿Es correcto?`;
+          }
+
+          await sendText(from, mensaje);
+          await sendButtons(from, "Confirmá o cambiá:", [
+            { id:"calc_clasif_ok", title:"✅ Sí, continuar" },
+            { id:"calc_clasif_cambiar", title:"🔄 Cambiar categoría" }
+          ]);
+          s.step = "calc_clasif_confirm";
           return res.sendStatus(200);
         }
         if (s.step==="calc_fob_unit"){
@@ -1733,6 +2033,12 @@ if (s.flow==="calc"){
 if (s.step==="c_mar_origen" && s.flow==="calc"){
   await sendTypingIndicator(from, 2000);
   if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
+    return res.sendStatus(200);
+  }
+}
+if (s.step==="c_aer_origen" && s.flow==="calc"){
+  await sendTypingIndicator(from, 2000);
+  if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "c_aer_origen" })) {
     return res.sendStatus(200);
   }
 }
