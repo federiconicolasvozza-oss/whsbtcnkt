@@ -1364,6 +1364,7 @@ async function readMatrix() {
     NIV2: find("NIVEL_2","NIVEL 2"),
     NIV3: find("NIVEL_3","NIVEL 3"),
     SUB : find("SUBCATEGORIA","SUBCATEGORÍA","PRODUCTO","SUBCATEGORIA/PRODUCTO"),
+    TAGS: find("TAGS","TAG","ETIQUETAS"),
     TASA: find("Tasa Estadisti","Tasa Estadistica","Tasa Estadística"),
     IVA : find("% IVA","IVA","IVA %"),
     IVA_A:find("% IVA ADIC","IVA ADICIONAL","IVA ADIC"),
@@ -1379,6 +1380,7 @@ async function readMatrix() {
     NIV2: r[idx.NIV2] || "",
     NIV3: r[idx.NIV3] || "",
     SUB : r[idx.SUB]  || "",
+    TAGS: (r[idx.TAGS] || "").toString(),
     tasa_est: isFinite(toNum(r[idx.TASA])) ? toNum(r[idx.TASA])/100 : TASA_ESTATISTICA,
     iva     : isFinite(toNum(r[idx.IVA])) ? toNum(r[idx.IVA])/100 : 0.21,
     iva_ad  : isFinite(toNum(r[idx.IVA_A])) ? toNum(r[idx.IVA_A])/100 : 0.00,
@@ -1388,6 +1390,13 @@ async function readMatrix() {
     internos: isFinite(toNum(r[idx.INT])) ? toNum(r[idx.INT])/100 : 0.00,
     nota    : (r[idx.NOTA] || "").toString()
   })).filter(x => (x.NIV1||x.NIV2||x.NIV3||x.SUB));
+
+  console.log(`✅ Matriz cargada: ${data.length} categorías`);
+  console.log(`📋 Columna TAGS encontrada en índice: ${idx.TAGS !== -1 ? idx.TAGS : 'NO ENCONTRADA'}`);
+  if (data.length > 0 && idx.TAGS !== -1) {
+    const conTags = data.filter(x => x.TAGS).length;
+    console.log(`🏷️ Categorías con tags: ${conTags}/${data.length}`);
+  }
 
   return data;
 }
