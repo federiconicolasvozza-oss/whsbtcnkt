@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import { google } from "googleapis";
 import Fuse from "fuse.js";
+import Anthropic from "@anthropic-ai/sdk";
 
 dotenv.config();
 const app = express();
@@ -18,6 +19,7 @@ const VERIFY_TOKEN = (process.env.VERIFY_TOKEN || "botconektar123").trim();
 const WHATSAPP_TOKEN = (process.env.WHATSAPP_TOKEN || "").trim();
 const PHONE_NUMBER_ID = (process.env.PHONE_NUMBER_ID || "").trim();
 const API_VERSION = "v23.0";
+const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || "").trim();
 
 /* Tarifa Sheets (cotizador + matriz) */
 const TAR_SHEET_ID = (process.env.GOOGLE_TARIFFS_SHEET_ID || "").trim();
@@ -88,6 +90,14 @@ const FUSE_AUTO_CONFIRM = 0.05;
 const FUSE_SUGGEST_LIMIT = 0.22;
 const FUSE_REJECT_LIMIT = 0.32;
 const FUSE_MAX_RESULTS = 7;
+
+/* ========= Anthropic Claude ========= */
+let anthropic = null;
+if (ANTHROPIC_API_KEY) {
+  anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+} else {
+  console.warn("⚠️ ANTHROPIC_API_KEY no configurada. Análisis de imágenes y extracción avanzada deshabilitados.");
+}
 
 /* ========= Google OAuth ========= */
 function chooseCredPath(filename) {
@@ -1056,13 +1066,64 @@ async function extraerInfoDesdeURL(url) {
 
     const html = await response.text();
 
-    // Usar Claude para extraer info del HTML (simulado con análisis básico por ahora)
-    // En producción, esto usaría Claude API para analizar el HTML
-    const titulo = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
-    const descripcion = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)?.[1] || "";
+    // Extraer título y descripción básicos con regex como fallback
+    let titulo = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
+    let descripcion = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)?.[1] || "";
 
-    const textoCompleto = titulo + " " + descripcion;
-    const palabrasClave = extraerPalabrasClave(textoCompleto);
+    let palabrasClave = [];
+
+    // Si tenemos Claude configurado, usarlo para análisis inteligente
+    if (anthropic) {
+      try {
+        // Limpiar HTML (tomar solo primeros 5000 chars para no saturar)
+        const htmlLimpio = html.substring(0, 5000)
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+
+        const prompt = `Analiza este HTML de una página de producto de e-commerce y extrae:
+
+1. El nombre del producto (título principal)
+2. Palabras clave relevantes para clasificar el producto (máximo 5-8 palabras)
+
+HTML:
+${htmlLimpio}
+
+Responde SOLO con un JSON en este formato:
+{
+  "titulo": "nombre del producto",
+  "palabras_clave": ["palabra1", "palabra2", "palabra3"]
+}`;
+
+        const message = await anthropic.messages.create({
+          model: "claude-3-5-haiku-20241022",
+          max_tokens: 500,
+          messages: [{
+            role: "user",
+            content: prompt
+          }]
+        });
+
+        const respuestaTexto = message.content[0].text;
+        const jsonMatch = respuestaTexto.match(/\{[\s\S]*\}/);
+
+        if (jsonMatch) {
+          const resultado = JSON.parse(jsonMatch[0]);
+          if (resultado.titulo) titulo = resultado.titulo;
+          if (resultado.palabras_clave && Array.isArray(resultado.palabras_clave)) {
+            palabrasClave = resultado.palabras_clave.map(p => norm(p)).filter(Boolean);
+          }
+        }
+      } catch (claudeErr) {
+        console.error("ERROR Claude API:", claudeErr);
+        // Si falla Claude, usar fallback con regex
+      }
+    }
+
+    // Fallback: si Claude no extrajo palabras o no está configurado, usar método básico
+    if (palabrasClave.length === 0) {
+      const textoCompleto = titulo + " " + descripcion;
+      palabrasClave = extraerPalabrasClave(textoCompleto);
+    }
 
     if (palabrasClave.length === 0) {
       return {
@@ -1094,15 +1155,122 @@ async function extraerInfoDesdeURL(url) {
   }
 }
 
-// Analiza una imagen de producto (placeholder - requiere Claude API)
+// Analiza una imagen de producto con Claude Vision
 async function analizarImagenProducto(imagenUrl) {
-  // TODO: Implementar con Claude Vision API
-  // Por ahora retorna un placeholder
-  return {
-    ok: false,
-    error: "NO_IMPLEMENTADO",
-    mensaje: "📸 El análisis de imágenes estará disponible próximamente. Por favor, usá la descripción o link del producto."
-  };
+  if (!anthropic) {
+    return {
+      ok: false,
+      error: "NO_CONFIGURADO",
+      mensaje: "📸 El análisis de imágenes requiere configurar ANTHROPIC_API_KEY en el archivo .env"
+    };
+  }
+
+  try {
+    // Descargar la imagen
+    const response = await fetch(imagenUrl, {
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
+      }
+    });
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: "NO_ACCESIBLE",
+        mensaje: "❌ No pude acceder a la imagen. Intentá enviarla de nuevo."
+      };
+    }
+
+    // Convertir a base64
+    const buffer = await response.arrayBuffer();
+    const base64 = Buffer.from(buffer).toString('base64');
+
+    // Determinar tipo de imagen
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const mediaType = contentType.includes('png') ? 'image/png' :
+                      contentType.includes('gif') ? 'image/gif' :
+                      contentType.includes('webp') ? 'image/webp' : 'image/jpeg';
+
+    // Analizar con Claude Vision
+    const message = await anthropic.messages.create({
+      model: "claude-3-5-haiku-20241022",
+      max_tokens: 500,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: mediaType,
+              data: base64
+            }
+          },
+          {
+            type: "text",
+            text: `Analiza esta imagen de un producto y extrae:
+
+1. El nombre o tipo de producto que se ve en la imagen
+2. Palabras clave relevantes para clasificarlo (máximo 5-8 palabras clave)
+3. Si la imagen es apropiada para análisis comercial (no contenido inapropiado)
+4. Si el producto es muy complejo (ej: maquinaria industrial, equipos médicos caros, vehículos)
+
+Responde SOLO con un JSON en este formato:
+{
+  "apropiada": true/false,
+  "producto": "nombre del producto",
+  "palabras_clave": ["palabra1", "palabra2", "palabra3"],
+  "complejidad": "baja/media/alta",
+  "requiere_asesor": true/false
+}`
+          }
+        ]
+      }]
+    });
+
+    const respuestaTexto = message.content[0].text;
+    const jsonMatch = respuestaTexto.match(/\{[\s\S]*\}/);
+
+    if (!jsonMatch) {
+      return {
+        ok: false,
+        error: "ERROR_ANALISIS",
+        mensaje: "❌ No pude analizar la imagen correctamente. Intentá con otra foto más clara."
+      };
+    }
+
+    const resultado = JSON.parse(jsonMatch[0]);
+
+    // Validar que la imagen sea apropiada
+    if (!resultado.apropiada) {
+      return {
+        ok: false,
+        error: "IMAGEN_INAPROPIADA",
+        mensaje: "⚠️ La imagen no es apropiada o no muestra un producto claro.\n\nPor favor:\n✓ Enviá una foto del producto\n✓ Con buena iluminación\n✓ Que se vea el producto completo"
+      };
+    }
+
+    // Normalizar palabras clave
+    const palabrasClave = (resultado.palabras_clave || [])
+      .map(p => norm(p))
+      .filter(Boolean);
+
+    return {
+      ok: true,
+      producto: resultado.producto || "",
+      palabrasClave,
+      complejidad: resultado.complejidad || "media",
+      requiere_asesor: resultado.requiere_asesor || false
+    };
+
+  } catch (err) {
+    console.error("ERROR analizarImagenProducto:", err);
+    return {
+      ok: false,
+      error: "ERROR_GENERICO",
+      mensaje: "❌ Hubo un error al analizar la imagen. Probá con otro método o contactá a un asesor."
+    };
+  }
 }
 
 /* ========= Estado ========= */
@@ -1767,6 +1935,155 @@ else if (btnId==="calc_go"){
       }
 
       if (s.step !== "cotizar") return res.sendStatus(200);
+    }
+
+    /* ===== IMÁGENES (análisis de productos) ===== */
+    if (type === "image" && s.step === "calc_foto_wait") {
+      await sendTypingIndicator(from, 3000);
+
+      // Obtener URL de la imagen desde WhatsApp
+      const imageId = msg.image?.id;
+      if (!imageId) {
+        await sendText(from, "⚠️ No pude recibir la imagen. Intentá enviarla de nuevo.");
+        return res.sendStatus(200);
+      }
+
+      // Obtener la URL de la imagen desde WhatsApp Media API
+      let imageUrl;
+      try {
+        const mediaResponse = await fetch(
+          `https://graph.facebook.com/${API_VERSION}/${imageId}`,
+          {
+            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
+          }
+        );
+        const mediaData = await mediaResponse.json();
+        imageUrl = mediaData.url;
+      } catch (err) {
+        console.error("ERROR obteniendo URL de imagen:", err);
+        await sendText(from, "❌ Hubo un error al procesar la imagen. Intentá de nuevo o usá otro método.");
+        await sendButtons(from, "¿Querés intentar de otra forma?", [
+          { id:"calc_link_desc", title:"🔗 Link o descripción" },
+          { id:"calc_cat", title:"📂 Buscar por categoría" }
+        ]);
+        return res.sendStatus(200);
+      }
+
+      // Analizar con Claude Vision
+      await sendText(from, "📸 Analizando la imagen...");
+      const resultado = await analizarImagenProducto(imageUrl);
+
+      if (!resultado.ok) {
+        await sendText(from, resultado.mensaje);
+        await sendButtons(from, "¿Querés intentar de otra forma?", [
+          { id:"calc_foto", title:"📸 Otra foto" },
+          { id:"calc_link_desc", title:"🔗 Link o descripción" },
+          { id:"calc_cat", title:"📂 Buscar por categoría" }
+        ]);
+        return res.sendStatus(200);
+      }
+
+      // Si el producto es muy complejo, escalar directo a asesor
+      if (resultado.requiere_asesor || resultado.complejidad === "alta") {
+        s.step = "waiting_asesor";
+        await sendText(from,
+          `📸 Identifiqué: *${resultado.producto}*\n\n` +
+          `🚨 Este producto requiere asesoramiento especializado.\n\n` +
+          `¿Por qué?\n` +
+          `✓ Clasificación compleja\n` +
+          `✓ Múltiples regulaciones aplicables\n` +
+          `✓ Requiere análisis detallado\n\n` +
+          `💼 Un especialista te contactará en 4 horas.\n\n` +
+          `Datos registrados:\n` +
+          `━━━━━━━━━━━━━━━\n` +
+          `📦 ${resultado.producto}\n` +
+          `📸 Imagen adjunta\n` +
+          `🏢 ${s.empresa || "No especificada"}\n` +
+          `🔖 Prioridad: ALTA\n` +
+          `━━━━━━━━━━━━━━━`
+        );
+        await sendButtons(from, "También podés:", [
+          { id:"calc_cat", title:"📂 Buscar por categoría" },
+          { id:"menu_si", title:"🏠 Volver al menú" }
+        ]);
+        await logSolicitud([
+          new Date().toISOString(),
+          from,
+          "",
+          s.empresa,
+          "whatsapp",
+          "escalar_asesor_imagen",
+          "",
+          "",
+          "",
+          "",
+          "",
+          `Producto complejo con imagen: ${resultado.producto}`
+        ]);
+        return res.sendStatus(200);
+      }
+
+      // Buscar en TAGS con las palabras extraídas
+      s.producto_desc = resultado.producto;
+      const resultadosBusqueda = await buscarProductoEnTags(resultado.palabrasClave);
+
+      if (resultadosBusqueda.length === 0 || resultadosBusqueda[0].score < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES) {
+        // ESCALAR A ASESOR
+        s.step = "waiting_asesor";
+        await sendText(from,
+          `📸 Identifiqué: *${resultado.producto}*\n\n` +
+          `⚠️ No encontré una categoría clara para este producto.\n\n` +
+          `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+          `Datos registrados:\n` +
+          `━━━━━━━━━━━━━━━\n` +
+          `📦 ${resultado.producto}\n` +
+          `📸 Imagen adjunta\n` +
+          `🏢 ${s.empresa || "No especificada"}\n` +
+          `━━━━━━━━━━━━━━━`
+        );
+        await sendButtons(from, "También podés:", [
+          { id:"calc_cat", title:"📂 Buscar por categoría" },
+          { id:"menu_si", title:"🏠 Volver al menú" }
+        ]);
+        await logSolicitud([
+          new Date().toISOString(),
+          from,
+          "",
+          s.empresa,
+          "whatsapp",
+          "escalar_asesor_imagen",
+          "",
+          "",
+          "",
+          "",
+          "",
+          `Producto con imagen sin clasificar: ${resultado.producto}`
+        ]);
+        return res.sendStatus(200);
+      }
+
+      // Encontró categoría - Mostrar con confirmación
+      const mejor = resultadosBusqueda[0];
+      s.matriz = mejor.fila;
+      s.categoria = mejor.categoria;
+      s.sel_n1 = mejor.fila.NIV1;
+      s.sel_n2 = mejor.fila.NIV2;
+      s.sel_n3 = mejor.fila.NIV3;
+
+      const mensaje =
+        `📸 Identifiqué: *${resultado.producto}*\n\n` +
+        `✅ Categoría encontrada:\n   *${mejor.categoria}*\n\n` +
+        `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
+        `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
+        `¿Es correcto?`;
+
+      await sendText(from, mensaje);
+      await sendButtons(from, "Confirmá o cambiá:", [
+        { id:"calc_clasif_ok", title:"✅ Sí, continuar" },
+        { id:"calc_clasif_cambiar", title:"🔄 Cambiar categoría" }
+      ]);
+      s.step = "calc_clasif_confirm";
+      return res.sendStatus(200);
     }
 
     /* ===== TEXTO ===== */
