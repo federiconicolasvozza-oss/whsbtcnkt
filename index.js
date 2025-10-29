@@ -985,6 +985,18 @@ async function buscarProductoEnTags(palabrasClave) {
           continue;
         }
 
+        // Match de raíz común (primeros 4-5 caracteres)
+        // Ej: "decorativo" vs "decoracion" → "decor" común
+        if (pNorm.length >= 5) {
+          const raizPalabra = pNorm.substring(0, 5);
+          const matchRaiz = tags.some(t => t.length >= 5 && t.substring(0, 5) === raizPalabra);
+          if (matchRaiz) {
+            score += PUNTOS_MATCH.MATCH_PARCIAL;
+            matches.push(palabra);
+            continue;
+          }
+        }
+
         // Match fuzzy
         for (const tag of tags) {
           const sim = similarity(pNorm, tag);
@@ -1013,7 +1025,14 @@ async function buscarProductoEnTags(palabrasClave) {
     // Ordenar por score descendente
     resultados.sort((a, b) => b.score - a.score);
 
-    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${resultados[0]?.score || 0}`);
+    const topScore = resultados[0]?.score || 0;
+    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${topScore}`);
+
+    // Si el score es bajo, sugerir tags faltantes
+    if (topScore < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES && palabrasClave.length > 0) {
+      console.log(`⚠️ Score bajo (${topScore}). Palabras no encontradas: ${palabrasClave.join(", ")}`);
+      console.log(`💡 Considera agregar estos tags a tu matriz para mejorar el matching`);
+    }
 
     return resultados;
   } catch (err) {
