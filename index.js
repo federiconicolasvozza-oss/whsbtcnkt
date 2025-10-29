@@ -2033,7 +2033,7 @@ else if (btnId==="calc_go"){
         await sendText(from,
           `📸 Identifiqué: *${resultado.producto}*\n\n` +
           `⚠️ No encontré una categoría clara para este producto.\n\n` +
-          `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+          `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
           `Datos registrados:\n` +
           `━━━━━━━━━━━━━━━\n` +
           `📦 ${resultado.producto}\n` +
@@ -2252,7 +2252,7 @@ if (s.flow==="calc"){
             await sendText(from,
               `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
               `⚠️ No encontré una categoría clara para este producto.\n\n` +
-              `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+              `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
               `Datos registrados:\n` +
               `━━━━━━━━━━━━━━━\n` +
               `📦 Producto: ${s.producto_desc}\n` +
