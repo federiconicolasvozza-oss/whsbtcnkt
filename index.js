@@ -1026,12 +1026,24 @@ async function buscarProductoEnTags(palabrasClave) {
     resultados.sort((a, b) => b.score - a.score);
 
     const topScore = resultados[0]?.score || 0;
-    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${topScore}`);
+    console.log(`\n🔍 DEBUG buscarProductoEnTags:`);
+    console.log(`   📊 Resultados totales: ${resultados.length}`);
+    console.log(`   🎯 Top score: ${topScore} (umbral: ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
+
+    if (resultados.length > 0) {
+      console.log(`   🏆 Top 3 matches:`);
+      resultados.slice(0, 3).forEach((r, i) => {
+        console.log(`      ${i+1}. ${r.categoria} (score: ${r.score})`);
+        console.log(`         Tags: ${r.fila.TAGS?.substring(0, 60)}...`);
+        console.log(`         Matches: [${r.matches.join(", ")}]`);
+      });
+    }
 
     // Si el score es bajo, sugerir tags faltantes
     if (topScore < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES && palabrasClave.length > 0) {
-      console.log(`⚠️ Score bajo (${topScore}). Palabras no encontradas: ${palabrasClave.join(", ")}`);
-      console.log(`💡 Considera agregar estos tags a tu matriz para mejorar el matching`);
+      console.log(`\n   ⚠️ Score insuficiente (${topScore} < ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
+      console.log(`   🔎 Palabras buscadas: [${palabrasClave.join(", ")}]`);
+      console.log(`   💡 Sugerencia: Agregar estas palabras como tags en la matriz\n`);
     }
 
     return resultados;
@@ -1279,6 +1291,9 @@ Responde SOLO con un JSON en este formato:
       .map(p => norm(p))
       .filter(Boolean);
 
+    console.log(`📸 Claude Vision extrajo: "${resultado.producto}"`);
+    console.log(`🔍 Palabras clave: [${palabrasClave.join(", ")}]`);
+
     return {
       ok: true,
       producto: resultado.producto || "",
@@ -1349,6 +1364,7 @@ async function readMatrix() {
     NIV2: find("NIVEL_2","NIVEL 2"),
     NIV3: find("NIVEL_3","NIVEL 3"),
     SUB : find("SUBCATEGORIA","SUBCATEGORÍA","PRODUCTO","SUBCATEGORIA/PRODUCTO"),
+    TAGS: find("TAGS","TAG","ETIQUETAS"),
     TASA: find("Tasa Estadisti","Tasa Estadistica","Tasa Estadística"),
     IVA : find("% IVA","IVA","IVA %"),
     IVA_A:find("% IVA ADIC","IVA ADICIONAL","IVA ADIC"),
@@ -1364,6 +1380,7 @@ async function readMatrix() {
     NIV2: r[idx.NIV2] || "",
     NIV3: r[idx.NIV3] || "",
     SUB : r[idx.SUB]  || "",
+    TAGS: (r[idx.TAGS] || "").toString(),
     tasa_est: isFinite(toNum(r[idx.TASA])) ? toNum(r[idx.TASA])/100 : TASA_ESTATISTICA,
     iva     : isFinite(toNum(r[idx.IVA])) ? toNum(r[idx.IVA])/100 : 0.21,
     iva_ad  : isFinite(toNum(r[idx.IVA_A])) ? toNum(r[idx.IVA_A])/100 : 0.00,
@@ -1373,6 +1390,13 @@ async function readMatrix() {
     internos: isFinite(toNum(r[idx.INT])) ? toNum(r[idx.INT])/100 : 0.00,
     nota    : (r[idx.NOTA] || "").toString()
   })).filter(x => (x.NIV1||x.NIV2||x.NIV3||x.SUB));
+
+  console.log(`✅ Matriz cargada: ${data.length} categorías`);
+  console.log(`📋 Columna TAGS encontrada en índice: ${idx.TAGS !== -1 ? idx.TAGS : 'NO ENCONTRADA'}`);
+  if (data.length > 0 && idx.TAGS !== -1) {
+    const conTags = data.filter(x => x.TAGS).length;
+    console.log(`🏷️ Categorías con tags: ${conTags}/${data.length}`);
+  }
 
   return data;
 }
