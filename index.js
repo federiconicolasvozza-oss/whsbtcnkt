@@ -1026,12 +1026,24 @@ async function buscarProductoEnTags(palabrasClave) {
     resultados.sort((a, b) => b.score - a.score);
 
     const topScore = resultados[0]?.score || 0;
-    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${topScore}`);
+    console.log(`\n🔍 DEBUG buscarProductoEnTags:`);
+    console.log(`   📊 Resultados totales: ${resultados.length}`);
+    console.log(`   🎯 Top score: ${topScore} (umbral: ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
+
+    if (resultados.length > 0) {
+      console.log(`   🏆 Top 3 matches:`);
+      resultados.slice(0, 3).forEach((r, i) => {
+        console.log(`      ${i+1}. ${r.categoria} (score: ${r.score})`);
+        console.log(`         Tags: ${r.fila.TAGS?.substring(0, 60)}...`);
+        console.log(`         Matches: [${r.matches.join(", ")}]`);
+      });
+    }
 
     // Si el score es bajo, sugerir tags faltantes
     if (topScore < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES && palabrasClave.length > 0) {
-      console.log(`⚠️ Score bajo (${topScore}). Palabras no encontradas: ${palabrasClave.join(", ")}`);
-      console.log(`💡 Considera agregar estos tags a tu matriz para mejorar el matching`);
+      console.log(`\n   ⚠️ Score insuficiente (${topScore} < ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
+      console.log(`   🔎 Palabras buscadas: [${palabrasClave.join(", ")}]`);
+      console.log(`   💡 Sugerencia: Agregar estas palabras como tags en la matriz\n`);
     }
 
     return resultados;
@@ -1278,6 +1290,9 @@ Responde SOLO con un JSON en este formato:
     const palabrasClave = (resultado.palabras_clave || [])
       .map(p => norm(p))
       .filter(Boolean);
+
+    console.log(`📸 Claude Vision extrajo: "${resultado.producto}"`);
+    console.log(`🔍 Palabras clave: [${palabrasClave.join(", ")}]`);
 
     return {
       ok: true,
