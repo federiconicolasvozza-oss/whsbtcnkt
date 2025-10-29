@@ -48,9 +48,9 @@ const RATE_IIGG        = Number(process.env.RATE_IIGG        ?? 0.06);
 
 /* Sistema de clasificación automática */
 const UMBRAL_CONFIANZA = {
-  AUTO_CLASIFICAR: 20,      // Score >= 20 → Clasifica directo
-  MOSTRAR_OPCIONES: 15,     // Score >= 15 → Muestra con confirmación
-  ESCALAR_ASESOR: 0         // Score < 15 → Escala a humano
+  AUTO_CLASIFICAR: 20,      // Score >= 20 → Clasifica directo (2 matches exactos o más)
+  MOSTRAR_OPCIONES: 10,     // Score >= 10 → Muestra con confirmación (1 match exacto)
+  ESCALAR_ASESOR: 0         // Score < 10 → Escala a humano
 };
 
 const PUNTOS_MATCH = {
@@ -985,6 +985,18 @@ async function buscarProductoEnTags(palabrasClave) {
           continue;
         }
 
+        // Match de raíz común (primeros 4-5 caracteres)
+        // Ej: "decorativo" vs "decoracion" → "decor" común
+        if (pNorm.length >= 5) {
+          const raizPalabra = pNorm.substring(0, 5);
+          const matchRaiz = tags.some(t => t.length >= 5 && t.substring(0, 5) === raizPalabra);
+          if (matchRaiz) {
+            score += PUNTOS_MATCH.MATCH_PARCIAL;
+            matches.push(palabra);
+            continue;
+          }
+        }
+
         // Match fuzzy
         for (const tag of tags) {
           const sim = similarity(pNorm, tag);
@@ -1013,7 +1025,14 @@ async function buscarProductoEnTags(palabrasClave) {
     // Ordenar por score descendente
     resultados.sort((a, b) => b.score - a.score);
 
-    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${resultados[0]?.score || 0}`);
+    const topScore = resultados[0]?.score || 0;
+    console.log(`DEBUG buscarProductoEnTags: ${resultados.length} resultados. Top score: ${topScore}`);
+
+    // Si el score es bajo, sugerir tags faltantes
+    if (topScore < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES && palabrasClave.length > 0) {
+      console.log(`⚠️ Score bajo (${topScore}). Palabras no encontradas: ${palabrasClave.join(", ")}`);
+      console.log(`💡 Considera agregar estos tags a tu matriz para mejorar el matching`);
+    }
 
     return resultados;
   } catch (err) {
@@ -1211,15 +1230,20 @@ async function analizarImagenProducto(imagenUrl) {
             text: `Analiza esta imagen de un producto y extrae:
 
 1. El nombre o tipo de producto que se ve en la imagen
-2. Palabras clave relevantes para clasificarlo (máximo 5-8 palabras clave)
+2. Palabras clave relevantes para clasificarlo: incluye el nombre del producto, sinónimos, categoría, material, uso, etc. (5-10 palabras clave variadas)
 3. Si la imagen es apropiada para análisis comercial (no contenido inapropiado)
 4. Si el producto es muy complejo (ej: maquinaria industrial, equipos médicos caros, vehículos)
+
+Ejemplos de palabras clave:
+- Para una billetera: ["billetera", "cartera", "monedero", "cuero", "accesorio", "moda"]
+- Para un mouse: ["mouse", "raton", "computadora", "informatica", "periferico", "inalambrico"]
+- Para un jarrón: ["jarron", "florero", "decoracion", "ornamento", "hogar", "ceramica"]
 
 Responde SOLO con un JSON en este formato:
 {
   "apropiada": true/false,
   "producto": "nombre del producto",
-  "palabras_clave": ["palabra1", "palabra2", "palabra3"],
+  "palabras_clave": ["palabra1", "palabra2", "palabra3", ...],
   "complejidad": "baja/media/alta",
   "requiere_asesor": true/false
 }`
@@ -2033,7 +2057,7 @@ else if (btnId==="calc_go"){
         await sendText(from,
           `📸 Identifiqué: *${resultado.producto}*\n\n` +
           `⚠️ No encontré una categoría clara para este producto.\n\n` +
-          `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+          `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
           `Datos registrados:\n` +
           `━━━━━━━━━━━━━━━\n` +
           `📦 ${resultado.producto}\n` +
@@ -2252,7 +2276,7 @@ if (s.flow==="calc"){
             await sendText(from,
               `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
               `⚠️ No encontré una categoría clara para este producto.\n\n` +
-              `💬 Te conecto con un asesor (responde en 2-4 hs).\n\n` +
+              `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
               `Datos registrados:\n` +
               `━━━━━━━━━━━━━━━\n` +
               `📦 Producto: ${s.producto_desc}\n` +
