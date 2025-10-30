@@ -34,6 +34,7 @@ const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB      = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
 const TAB_USUARIOS = (process.env.GOOGLE_LOG_TAB_USUARIOS || "Usuarios").trim();
 const TAB_CALCULOS = (process.env.GOOGLE_CALC_TAB || "calculos").trim();
+const TAB_PRODUCTOS_NO_CLASIFICADOS = "Productos a Clasificar";
 
 const AEREO_MIN_KG = Number(process.env.AEREO_MIN_KG ?? 100);
 const VALIDEZ_DIAS = Number(process.env.VALIDEZ_DIAS ?? 7);
@@ -403,6 +404,29 @@ async function logRating(waId, empresa, valor){
   }catch(e){
     console.error("❌ ERROR logRating:", e?.message||e);
     console.error("   Detalles:", {LOG_SHEET_ID, LOG_TAB, waId, empresa, valor});
+  }
+}
+
+// Registrar productos que no se pudieron clasificar
+async function logProductoNoClasificado(waId, empresa, productoDesc, palabrasClave, metodo = "descripcion"){
+  try{
+    await sheetsClient().spreadsheets.values.append({
+      spreadsheetId: LOG_SHEET_ID,
+      range: `${TAB_PRODUCTOS_NO_CLASIFICADOS}!A1`,
+      valueInputOption: "USER_ENTERED",
+      requestBody: { values: [[
+        new Date().toISOString(),
+        waId,
+        empresa || "No especificada",
+        productoDesc,
+        palabrasClave.join(", "),
+        metodo,
+        "Pendiente"
+      ]] }
+    });
+    console.log(`📝 Producto no clasificado registrado: ${productoDesc}`);
+  }catch(e){
+    console.error("❌ ERROR logProductoNoClasificado:", e?.message||e);
   }
 }
 
@@ -1473,8 +1497,24 @@ app.post("/webhook", async (req,res)=>{
 
       // Si ya tiene empresa guardada → bienvenida personalizada
       if (s.empresa) {
-        const hora = new Date().getHours();
-        const saludo = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
+        // Obtener hora en Argentina (UTC-3)
+        const horaArgentina = new Date().toLocaleString("en-US", {
+          timeZone: "America/Argentina/Buenos_Aires",
+          hour: "numeric",
+          hour12: false
+        });
+        const hora = parseInt(horaArgentina);
+
+        // Horarios adaptados para Argentina: 6-12, 12-20, 20-6
+        let saludo;
+        if (hora >= 6 && hora < 12) {
+          saludo = "Buenos días";
+        } else if (hora >= 12 && hora < 20) {
+          saludo = "Buenas tardes";
+        } else {
+          saludo = "Buenas noches";
+        }
+
         await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!`);
         await sleep(400);
         await sendMainActions(from);
@@ -2092,6 +2132,7 @@ else if (btnId==="calc_go"){
           { id:"calc_cat", title:"📂 Buscar por categoría" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
+        await logProductoNoClasificado(from, s.empresa, resultado.producto, resultado.palabrasClave, "imagen_compleja");
         await logSolicitud([
           new Date().toISOString(),
           from,
@@ -2132,6 +2173,7 @@ else if (btnId==="calc_go"){
           { id:"calc_cat", title:"📂 Buscar por categoría" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
+        await logProductoNoClasificado(from, s.empresa, resultado.producto, resultado.palabrasClave, "imagen");
         await logSolicitud([
           new Date().toISOString(),
           from,
@@ -2352,6 +2394,7 @@ if (s.flow==="calc"){
               { id:"calc_cat", title:"📂 Buscar por categoría" },
               { id:"menu_si", title:"🏠 Volver al menú" }
             ]);
+            await logProductoNoClasificado(from, s.empresa, s.producto_desc, palabrasClave, "descripcion");
             await logSolicitud([
               new Date().toISOString(),
               from,
