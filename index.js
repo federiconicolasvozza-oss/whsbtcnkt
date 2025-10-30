@@ -967,31 +967,18 @@ async function buscarProductoEnTags(palabrasClave) {
 
     for (const fila of M) {
       const tagsRaw = fila.TAGS || "";
-      const tags = norm(tagsRaw).split(/[,\s]+/).filter(Boolean);
+      // PRIMERO split por comas, DESPUÉS normalizar cada tag
+      const tags = tagsRaw.split(/[,;]+/).map(t => norm(t.trim())).filter(Boolean);
       if (tags.length === 0) continue;
 
       let score = 0;
       let matches = [];
 
-      // Debug específico para categoría Mouse
-      const isMouseCategory = (fila.SUB || "").toLowerCase().includes("mouse");
-      if (isMouseCategory) {
-        console.log(`\n🔍 DEBUG Categoría Mouse:`);
-        console.log(`   📝 Tags raw: "${tagsRaw}"`);
-        console.log(`   🔤 Tags norm: [${tags.join(", ")}]`);
-        console.log(`   🎯 Buscando: [${palabrasClave.join(", ")}]`);
-      }
-
       for (const palabra of palabrasClave) {
         const pNorm = norm(palabra);
 
-        if (isMouseCategory) {
-          console.log(`   🔎 Comparando "${pNorm}" con [${tags.join(", ")}]`);
-        }
-
         // Match exacto
         if (tags.includes(pNorm)) {
-          if (isMouseCategory) console.log(`      ✅ MATCH EXACTO: "${pNorm}"`);
           score += PUNTOS_MATCH.MATCH_EXACTO;
           matches.push(palabra);
           continue;
@@ -1028,11 +1015,6 @@ async function buscarProductoEnTags(palabrasClave) {
             break;
           }
         }
-      }
-
-      if (isMouseCategory) {
-        console.log(`   📊 Score final Mouse: ${score}`);
-        console.log(`   🎯 Matches: [${matches.join(", ")}]\n`);
       }
 
       if (score > 0) {
