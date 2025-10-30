@@ -962,17 +962,32 @@ async function buscarProductoEnTags(palabrasClave) {
     const resultados = [];
 
     for (const fila of M) {
-      const tags = norm(fila.TAGS || "").split(/[,\s]+/).filter(Boolean);
+      const tagsRaw = fila.TAGS || "";
+      const tags = norm(tagsRaw).split(/[,\s]+/).filter(Boolean);
       if (tags.length === 0) continue;
 
       let score = 0;
       let matches = [];
 
+      // Debug específico para categoría Mouse
+      const isMouseCategory = (fila.SUB || "").toLowerCase().includes("mouse");
+      if (isMouseCategory) {
+        console.log(`\n🔍 DEBUG Categoría Mouse:`);
+        console.log(`   📝 Tags raw: "${tagsRaw}"`);
+        console.log(`   🔤 Tags norm: [${tags.join(", ")}]`);
+        console.log(`   🎯 Buscando: [${palabrasClave.join(", ")}]`);
+      }
+
       for (const palabra of palabrasClave) {
         const pNorm = norm(palabra);
 
+        if (isMouseCategory) {
+          console.log(`   🔎 Comparando "${pNorm}" con [${tags.join(", ")}]`);
+        }
+
         // Match exacto
         if (tags.includes(pNorm)) {
+          if (isMouseCategory) console.log(`      ✅ MATCH EXACTO: "${pNorm}"`);
           score += PUNTOS_MATCH.MATCH_EXACTO;
           matches.push(palabra);
           continue;
@@ -1009,6 +1024,11 @@ async function buscarProductoEnTags(palabrasClave) {
             break;
           }
         }
+      }
+
+      if (isMouseCategory) {
+        console.log(`   📊 Score final Mouse: ${score}`);
+        console.log(`   🎯 Matches: [${matches.join(", ")}]\n`);
       }
 
       if (score > 0) {
@@ -1337,16 +1357,19 @@ const emptyState = () => ({
   // flete local
   local_cap:null, local_tipo:null, local_dist:null,
 });
-function getS(id){
+async function getS(id){
   if(!sessions.has(id)) {
     sessions.set(id, { data: { ...emptyState() } });
-    // Cargar empresa guardada
-    getUserEmpresa(id).then(empresa => {
-      if (empresa) {
-        const s = sessions.get(id);
-        if (s) s.data.empresa = empresa;
+    // Cargar empresa guardada - ESPERAR a que termine
+    const empresa = await getUserEmpresa(id);
+    if (empresa) {
+      const s = sessions.get(id);
+      if (s) {
+        s.data.empresa = empresa;
+        s.data.askedEmpresa = true; // Marcar que ya tiene empresa
+        console.log(`👤 Usuario conocido: ${id} → ${empresa}`);
       }
-    });
+    }
   }
   return sessions.get(id);
 }
@@ -1461,9 +1484,19 @@ app.post("/webhook", async (req,res)=>{
       s.welcomed = true;
       await sendImage(from, LOGO_URL, "");
       await sleep(400);
-      await sendText(from, WELCOME_TEXT);
-      await sleep(400);
-      if (!s.askedEmpresa) {
+
+      // Si ya tiene empresa guardada → bienvenida personalizada
+      if (s.empresa) {
+        const hora = new Date().getHours();
+        const saludo = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
+        await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!`);
+        await sleep(400);
+        await sendMainActions(from);
+        s.step = "main";
+      } else {
+        // Usuario nuevo → bienvenida completa
+        await sendText(from, WELCOME_TEXT);
+        await sleep(400);
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
         s.step = "ask_empresa";
         s.askedEmpresa = true;
