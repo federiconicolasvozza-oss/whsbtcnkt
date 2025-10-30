@@ -2084,7 +2084,7 @@ else if (btnId==="calc_go"){
           `━━━━━━━━━━━━━━━`
         );
         await sendButtons(from, "También podés:", [
-          { id:"calc_cat", title:"📂 Buscar por categoría" },
+          { id:"calc_cat", title:"🔎 Categorías" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
         await logSolicitud([
@@ -2721,6 +2721,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
