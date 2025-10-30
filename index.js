@@ -399,7 +399,11 @@ async function logRating(waId, empresa, valor){
         "", "", "", "", "", valor, "rating del bot"
       ]] }
     });
-  }catch(e){ console.error("logRating error", e?.message||e); }
+    console.log(`⭐ Rating guardado: ${waId} → ${empresa} → ${valor} estrellas`);
+  }catch(e){
+    console.error("❌ ERROR logRating:", e?.message||e);
+    console.error("   Detalles:", {LOG_SHEET_ID, LOG_TAB, waId, empresa, valor});
+  }
 }
 
 /* ========= Courier regiones ========= */
@@ -1506,10 +1510,28 @@ app.post("/webhook", async (req,res)=>{
     // Cualquier primer mensaje → bienvenida
     if (!s.welcomed) { await showWelcomeOnce(); return res.sendStatus(200); }
 
-    // Comandos globales
+    // Comandos globales - funcionan desde CUALQUIER estado
     if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
-      if (lower==="inicio" || lower==="reset") { sessions.delete(from); await getS(from); }
+      if (lower==="inicio" || lower==="reset") {
+        sessions.delete(from);
+        await getS(from);
+      } else {
+        // Resetear estado para volver al menú
+        s.step = "main";
+        s.flow = null;
+      }
       await sendMainActions(from);
+      return res.sendStatus(200);
+    }
+
+    // Ayuda rápida
+    if (type==="text" && ["ayuda","help","?"].includes(lower)) {
+      await sendText(from,
+        `📌 *Comandos útiles:*\n\n` +
+        `• Escribí *menu* para volver al menú principal\n` +
+        `• Escribí *inicio* para reiniciar la conversación\n` +
+        `• Escribí *ayuda* para ver estos comandos`
+      );
       return res.sendStatus(200);
     }
 
@@ -2081,7 +2103,8 @@ else if (btnId==="calc_go"){
           `📸 Imagen adjunta\n` +
           `🏢 ${s.empresa || "No especificada"}\n` +
           `🔖 Prioridad: ALTA\n` +
-          `━━━━━━━━━━━━━━━`
+          `━━━━━━━━━━━━━━━\n\n` +
+          `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
         );
         await sendButtons(from, "También podés:", [
           { id:"calc_cat", title:"🔎 Categorías" },
@@ -2120,7 +2143,8 @@ else if (btnId==="calc_go"){
           `📦 ${resultado.producto}\n` +
           `📸 Imagen adjunta\n` +
           `🏢 ${s.empresa || "No especificada"}\n` +
-          `━━━━━━━━━━━━━━━`
+          `━━━━━━━━━━━━━━━\n\n` +
+          `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
         );
         await sendButtons(from, "También podés:", [
           { id:"calc_cat", title:"🔎 Categoria" },
@@ -2339,7 +2363,8 @@ if (s.flow==="calc"){
               `📦 Producto: ${s.producto_desc}\n` +
               `🏢 Empresa: ${s.empresa || "No especificada"}\n` +
               `📅 Fecha: ${new Date().toLocaleDateString()}\n` +
-              `━━━━━━━━━━━━━━━`
+              `━━━━━━━━━━━━━━━\n\n` +
+              `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
             );
             await sendButtons(from, "También podés:", [
               { id:"calc_cat", title:"📂 Buscar por categoría" },
