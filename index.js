@@ -1445,9 +1445,9 @@ function distinct(arr, keyFn){
 const askProdMetodo = (to) => sendButtons(to,
   "¿Cómo querés buscar tu producto?",
   [
-    { id:"calc_link_desc", title:"🔗📝 Link o Descripción" },
-    { id:"calc_foto",      title:"📸 Cargar imagen/foto" },
-    { id:"calc_cat",       title:"📂 Buscar por categoría" }
+    { id:"calc_link_desc", title:"🔗 Link o Descrip." },
+    { id:"calc_foto",      title:"📸 Imagen/Foto" },
+    { id:"calc_cat",       title:"🔎 Categorías" }
   ]
 );
 const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({
@@ -2044,8 +2044,8 @@ else if (btnId==="calc_go"){
         console.error("ERROR obteniendo URL de imagen:", err);
         await sendText(from, "❌ Hubo un error al procesar la imagen. Intentá de nuevo o usá otro método.");
         await sendButtons(from, "¿Querés intentar de otra forma?", [
-          { id:"calc_link_desc", title:"🔗 Link o descripción" },
-          { id:"calc_cat", title:"📂 Buscar por categoría" }
+          { id:"calc_link_desc", title:"🔗 Link o Descrip." },
+          { id:"calc_cat", title:"🔎 Categorías" }
         ]);
         return res.sendStatus(200);
       }
@@ -2058,8 +2058,8 @@ else if (btnId==="calc_go"){
         await sendText(from, resultado.mensaje);
         await sendButtons(from, "¿Querés intentar de otra forma?", [
           { id:"calc_foto", title:"📸 Otra foto" },
-          { id:"calc_link_desc", title:"🔗 Link o descripción" },
-          { id:"calc_cat", title:"📂 Buscar por categoría" }
+          { id:"calc_link_desc", title:"🔗 Link o Descrip." },
+          { id:"calc_cat", title:"🔎 Categorías" }
         ]);
         return res.sendStatus(200);
       }
@@ -2721,6 +2721,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
