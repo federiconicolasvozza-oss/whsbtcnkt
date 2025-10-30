@@ -1357,16 +1357,19 @@ const emptyState = () => ({
   // flete local
   local_cap:null, local_tipo:null, local_dist:null,
 });
-function getS(id){
+async function getS(id){
   if(!sessions.has(id)) {
     sessions.set(id, { data: { ...emptyState() } });
-    // Cargar empresa guardada
-    getUserEmpresa(id).then(empresa => {
-      if (empresa) {
-        const s = sessions.get(id);
-        if (s) s.data.empresa = empresa;
+    // Cargar empresa guardada - ESPERAR a que termine
+    const empresa = await getUserEmpresa(id);
+    if (empresa) {
+      const s = sessions.get(id);
+      if (s) {
+        s.data.empresa = empresa;
+        s.data.askedEmpresa = true; // Marcar que ya tiene empresa
+        console.log(`👤 Usuario conocido: ${id} → ${empresa}`);
       }
-    });
+    }
   }
   return sessions.get(id);
 }
@@ -1481,9 +1484,19 @@ app.post("/webhook", async (req,res)=>{
       s.welcomed = true;
       await sendImage(from, LOGO_URL, "");
       await sleep(400);
-      await sendText(from, WELCOME_TEXT);
-      await sleep(400);
-      if (!s.askedEmpresa) {
+
+      // Si ya tiene empresa guardada → bienvenida personalizada
+      if (s.empresa) {
+        const hora = new Date().getHours();
+        const saludo = hora < 12 ? "Buenos días" : hora < 19 ? "Buenas tardes" : "Buenas noches";
+        await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!`);
+        await sleep(400);
+        await sendMainActions(from);
+        s.step = "main";
+      } else {
+        // Usuario nuevo → bienvenida completa
+        await sendText(from, WELCOME_TEXT);
+        await sleep(400);
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
         s.step = "ask_empresa";
         s.askedEmpresa = true;
