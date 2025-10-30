@@ -2114,7 +2114,7 @@ else if (btnId==="calc_go"){
         await sendText(from,
           `📸 Identifiqué: *${resultado.producto}*\n\n` +
           `⚠️ No encontré una categoría clara para este producto.\n\n` +
-          `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
+          `💬 Te conecto con un asesor.\n\n` +
           `Datos registrados:\n` +
           `━━━━━━━━━━━━━━━\n` +
           `📦 ${resultado.producto}\n` +
@@ -2123,7 +2123,7 @@ else if (btnId==="calc_go"){
           `━━━━━━━━━━━━━━━`
         );
         await sendButtons(from, "También podés:", [
-          { id:"calc_cat", title:"📂 Buscar por categoría" },
+          { id:"calc_cat", title:"🔎 Categoria" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
         await logSolicitud([
@@ -2333,7 +2333,7 @@ if (s.flow==="calc"){
             await sendText(from,
               `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
               `⚠️ No encontré una categoría clara para este producto.\n\n` +
-              `💬 Te conecto con un asesor (responde en 1 día hábil).\n\n` +
+              `💬 Te conecto con un asesor.\n\n` +
               `Datos registrados:\n` +
               `━━━━━━━━━━━━━━━\n` +
               `📦 Producto: ${s.producto_desc}\n` +
@@ -2721,6 +2721,7 @@ async function cotizarCourierTarifas({ pais, kg }) {
     destino: "Ezeiza (EZE)"
   };
 }
+
 
 
 
