@@ -1569,8 +1569,18 @@ app.post("/webhook", async (req,res)=>{
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
       }
 
-      // ===== Cotizador clásico
-      else if (btnId.startsWith("menu_")){
+      // === Menú principal - DEBE IR ANTES del handler genérico menu_*
+      if (btnId==="menu_si"){
+        s.step = "main";
+        s.flow = null;
+        await sendMainActions(from);
+      }
+      else if (btnId==="menu_no"){
+        await sendText(from,"¡Gracias! Si necesitás algo más, escribinos cuando quieras.");
+      }
+
+      // ===== Cotizador clásico (modos de transporte)
+      else if (btnId.startsWith("menu_") && btnId !== "menu_si" && btnId !== "menu_no"){
         s.modo = btnId.replace("menu_","");
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
         if (s.modo==="aereo"){
@@ -1982,14 +1992,15 @@ else if (btnId==="calc_go"){
         sessions.delete(from);
       }
       // rating + volver
-      else if (/^rate_[1-5]$/.test(btnId)){ 
+      else if (/^rate_[1-5]$/.test(btnId)){
         const val = Number(btnId.split("_")[1]);
-        await sendText(from,"¡Gracias por tu calificación! ⭐"); 
+        await sendText(from,"¡Gracias por tu calificación! ⭐");
         await logRating(from, s.empresa, val);
+        await sendButtons(from, "¿Querés hacer otra consulta?", [
+          { id:"menu_si", title:"🏠 Volver al menú" },
+          { id:"menu_no", title:"❌ Finalizar" }
+        ]);
       }
-
-      else if (btnId==="menu_si"){ await sendMainActions(from); s.step="main"; }
-      else if (btnId==="menu_no"){ await sendText(from,"¡Gracias! Si necesitás algo más, escribinos cuando quieras."); }
 
       // === Flete Local ===
       else if (/^cap_\d+$/.test(btnId) && s.flow==="local" && s.step==="local_cap"){
