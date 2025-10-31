@@ -327,7 +327,8 @@ const upsellDespacho = (to) =>
   ]);
 
 const endFlow = async (to) => {
-  await askReturnMenu(to);
+  // Primero pedimos rating, después el menú de volver se muestra automáticamente
+  // cuando el usuario califica (ver handler de rate_[1-5] en líneas 1995-2002)
   await sendReview(to);
 };
 
