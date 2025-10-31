@@ -1578,6 +1578,7 @@ app.post("/webhook", async (req,res)=>{
       }
       else if (btnId==="menu_no"){
         await sendText(from,"¡Gracias! Si necesitás algo más, escribinos cuando quieras.");
+        sessions.delete(from);
       }
 
       // ===== Cotizador clásico (modos de transporte)
@@ -1716,11 +1717,11 @@ app.post("/webhook", async (req,res)=>{
       }
       else if (btnId==="desp_si"){ await sendText(from,"¡Genial! Nuestro equipo te contactará para cotizar el despacho. 🙌");
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","despachante_si","","","","","","Solicitó cotización de despacho"]);
-        await endFlow(from); sessions.delete(from);
+        await endFlow(from);
       }
       else if (btnId==="desp_no"){ await sendText(from,"¡Gracias por tu consulta! 🙌");
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","despachante_no","","","","","","No desea cotización de despacho"]);
-        await endFlow(from); sessions.delete(from);
+        await endFlow(from);
       }
 
       // ===== Calculadora (árbol + búsqueda)
@@ -1990,7 +1991,6 @@ else if (btnId==="calc_go"){
         await sendText(from,"¡Gracias! Nuestro equipo te contactará a la brevedad.");
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","email_rechazado", "", "", "", "", "", "", "Usuario no desea recibir email"]);
         await endFlow(from);
-        sessions.delete(from);
       }
       // rating + volver
       else if (/^rate_[1-5]$/.test(btnId)){
@@ -2068,7 +2068,7 @@ else if (btnId==="calc_go"){
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","flete_local", s.local_cap, title, "", "", s.local_tipo, monto, "Flete local"]);
 
         // cierre: rating + menú
-        await endFlow(from); sessions.delete(from);
+        await endFlow(from);
       }
 
       if (s.step !== "cotizar") return res.sendStatus(200);
