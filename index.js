@@ -880,55 +880,98 @@ async function cotizarCourier({ pais, kg }) {
 async function analizarConveniencia(s) {
   const sugerencias = [];
 
+  // ===== MARÍTIMO LCL =====
   if (s.maritimo_tipo === "LCL") {
-    const wm = Math.max(Number(s.lcl_tn) || 0, Number(s.lcl_m3) || 0);
-    if (wm > 20) {
+    const toneladas = Number(s.lcl_tn) || 0;
+    const m3 = Number(s.lcl_m3) || 0;
+    const wm = Math.max(toneladas, m3);
+
+    // 1. LCL > 15t → Alerta restricciones de manipulación
+    if (toneladas > 15) {
       sugerencias.push(
-        `💡 Con ${wm.toFixed(1)} W/M, te conviene un contenedor 40' completo (hasta 67m³). Puede ser más económico y tenés espacio exclusivo.`
+        `⚠️ ${toneladas.toFixed(1)} t supera el límite usual de LCL (15t). Te conviene FCL para evitar restricciones de manipulación.`
       );
-    } else if (wm > 10) {
+    }
+
+    // 2. LCL por m³ alto → FCL 40' directo
+    if (m3 >= 28 || wm >= 22) {
       sugerencias.push(
-        `💡 Tu carga ocupa ${wm.toFixed(1)} W/M. Un contenedor 20' completo puede costarte similar y te da hasta 33m³ exclusivos.`
+        `💡 Con ${m3.toFixed(1)} m³ / ${wm.toFixed(1)} W/M, conviene FCL 40' (cap. ~67 m³). Mejor costo por unidad y menor manipulación.`
+      );
+    }
+    // 3. LCL por m³ medio → FCL 20' directo
+    else if (m3 >= 12 && m3 < 28) {
+      sugerencias.push(
+        `💡 Con ${m3.toFixed(1)} m³, pasamos directo a FCL 20' (cap. ~33 m³). Suele ser más competitivo que LCL en este rango.`
+      );
+    }
+    // 4. LCL > 20 W/M → Sugerencia FCL 40'
+    else if (wm > 20) {
+      sugerencias.push(
+        `💡 Con ${wm.toFixed(1)} W/M, te conviene un 40' completo (hasta ~67 m³). Más económico y espacio exclusivo.`
+      );
+    }
+    // 5. LCL > 10 W/M → Sugerencia FCL 20'
+    else if (wm > 10 && wm <= 20) {
+      sugerencias.push(
+        `💡 Tu carga ocupa ${wm.toFixed(1)} W/M. Un 20' completo puede costar similar y te da hasta ~33 m³ exclusivos.`
+      );
+    }
+
+    // 6. Multi-contenedor por peso total muy alto
+    if (toneladas >= 30) {
+      const numContenedores = Math.ceil((toneladas * 1000) / 26000);
+      sugerencias.push(
+        `💡 ${toneladas.toFixed(1)} t requiere ≈${numContenedores} contenedores 40' por límites de peso. Cotizamos FCL múltiple para optimizar tarifa.`
       );
     }
   }
 
-  if (s.maritimo_tipo === "LCL" && (Number(s.lcl_tn) || 0) > 15) {
-    sugerencias.push(
-      `⚠️ ${Number(s.lcl_tn)} toneladas supera el límite usual de LCL (15t). Te conviene FCL para evitar restricciones de manipulación.`
-    );
-  }
-
+  // ===== AÉREO - CARGA GENERAL =====
   if (s.modo === "aereo" && s.aereo_tipo === "carga_general") {
     const kg = Number(s.peso_kg) || 0;
+    const volCbm = Number(s.vol_cbm) || 0;
+
+    // 7. Aéreo > 2000 kg → Marítimo (60-70%)
     if (kg > 2000) {
       sugerencias.push(
-        `💡 ${kg} kg por aéreo puede ser muy costoso. Marítimo puede ahorrarte 60-70% del costo (con 30-35 días más de tránsito).`
+        `💡 ${kg} kg por aéreo es muy costoso. Marítimo puede ahorrarte 60-70% (con +30-35 días de tránsito).`
       );
-    } else if (kg > 1000) {
+    }
+    // 8. Aéreo 1000-2000 kg → Marítimo significativo
+    else if (kg > 1000) {
       sugerencias.push(
         `💡 Con ${kg} kg, marítimo puede ser significativamente más económico. Si no es urgente, puede valerte la pena.`
       );
-    } else if (kg > 500) {
+    }
+    // 9. Aéreo 500-1000 kg → Marítimo (40-50%)
+    else if (kg > 500) {
       sugerencias.push(
         `💡 ${kg} kg está en el límite. Si tu envío no es urgente, marítimo puede ahorrarte 40-50% del costo.`
       );
     }
-  }
 
-  if (s.modo === "aereo" && s.aereo_tipo === "carga_general") {
-    const pesoReal = Number(s.peso_kg) || 0;
-    const pesoVol = ((Number(s.vol_cbm) || 0) * 167);
-    if (pesoReal > 0 && pesoVol / pesoReal > 2.5) {
+    // 10. Aéreo muy caro salvo urgencia (volumen/peso)
+    if (volCbm >= 3 || kg >= 800) {
       sugerencias.push(
-        `⚠️ Tu carga es liviana pero muy voluminosa. Aéreo cobra ${pesoVol.toFixed(0)} kg volumétricos vs ${pesoReal} kg reales. Marítimo puede ser mucho más económico.`
+        `💡 ${volCbm.toFixed(1)} m³ / ${kg} kg por aéreo suele ser muy caro salvo urgencia. Evaluá marítimo (o dividir envíos).`
+      );
+    }
+
+    // 11. Aéreo: peso volumétrico/real > 2.5× → Alerta voluminoso
+    const pesoVol = volCbm * 167;
+    if (kg > 0 && pesoVol / kg > 2.5) {
+      sugerencias.push(
+        `⚠️ Aéreo cobra ${pesoVol.toFixed(0)} kg vol. vs ${kg} kg reales. Marítimo puede ser mucho más económico.`
       );
     }
   }
 
+  // ===== COURIER =====
+  // 12. Courier > 30 kg → Aéreo general
   if (s.modo === "aereo" && s.aereo_tipo === "courier" && (Number(s.peso_kg) || 0) > 30) {
     sugerencias.push(
-      `💡 Para más de 30 kg, carga aérea general suele ser 40-50% más económica que courier. ¿Querés que te cotice aéreo normal?`
+      `💡 Para >30 kg, aéreo general suele ser 40-50% más económico que courier. ¿Querés que te cotice aéreo normal?`
     );
   }
 
@@ -2271,16 +2314,10 @@ else if (btnId==="calc_go"){
           await sendText(from,"⚠️ Ingresá un *número válido* para el peso (ej.: 1232).\nNo uses letras ni símbolos.");
           return res.sendStatus(200);
         }
-        s.peso_kg = Math.max(0, Math.round(peso)); s.step="aer_vol";
-        await sendText(from,"📦 *Peso volumétrico (kg)* (poné 0 si no sabés)."); return res.sendStatus(200);
-      }
-      if (s.step==="aer_vol"){
-        const vol = toNum(text);
-        if (isNaN(vol) || vol < 0) {
-          await sendText(from,"⚠️ Ingresá un *número válido* para el volumen (ej.: 1232).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
-        s.vol_cbm = Math.max(0, vol); await askResumen(from, s); return res.sendStatus(200);
+        s.peso_kg = Math.max(0, Math.round(peso));
+        s.vol_cbm = 0; // No se pregunta peso volumétrico, se deja en 0
+        await askResumen(from, s);
+        return res.sendStatus(200);
       }
       if (s.step==="courier_origen"){
         const input = norm(text);
@@ -2695,7 +2732,6 @@ function resumenTexto(d){
       lines.push("• Subtipo: *Carga general*");
       lines.push(`• Ruta: *${d.origen_aeropuerto || "?"}* ➡️ *${d.destino_aeropuerto}*`);
       if (d.peso_kg!=null) lines.push(`• Peso: *${d.peso_kg} kg*`);
-      if (d.vol_cbm!=null) lines.push(`• Peso volumétrico: *${d.vol_cbm} kg*`);
     } else {
       lines.push(`• Subtipo: *Courier* (${d.courier_pf==="PF"?"PF":"Empresa"})`);
       lines.push(`• Origen: *${d.origen_aeropuerto || "?"}* ➡️ *${d.destino_aeropuerto}*`);
