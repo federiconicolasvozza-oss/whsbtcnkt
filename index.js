@@ -854,9 +854,12 @@ async function cotizarTerrestre({ origen }) {
 }
 
 async function cotizarCourier({ pais, kg }) {
+  console.log(`📋 cotizarCourier - Leyendo pestaña: TAB_COURIER="${TAB_COURIER}"`);
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
+  console.log(`   Filas leídas: ${rows.length}`);
   if (!rows.length) throw new Error("Courier vacío");
   const header = rows[0], data = rows.slice(1);
+  console.log(`   Header: ${JSON.stringify(header.slice(0, 5))}`);
   const iPeso = headerIndex(header,"peso","peso (kg)");
   const iAS   = headerIndex(header,"america sur");
   const iUS   = headerIndex(header,"usa","usa & canada","usa & canadá");
@@ -2542,11 +2545,20 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
     }
 
     /* ===== COTIZAR (ejecución) ===== */
-/* ===== COTIZAR (ejecución) ===== */
     if (s.step==="cotizar"){
       await sendTypingIndicator(from, 2500);
+
+      // DEBUG: Log para verificar qué tipo de cotización se ejecuta
+      console.log(`\n🔍 DEBUG COTIZACIÓN [${from}]`);
+      console.log(`   modo: ${s.modo}`);
+      console.log(`   aereo_tipo: ${s.aereo_tipo}`);
+      console.log(`   origen_aeropuerto: ${s.origen_aeropuerto}`);
+      console.log(`   peso_kg: ${s.peso_kg}`);
+      console.log(`   courier_pf: ${s.courier_pf}\n`);
+
       try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
+          console.log("✈️ Ejecutando cotizarAereo (carga general)");
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
           if (!r){
             await sendButtons(from,
@@ -2575,6 +2587,8 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
             }
           }
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
+          console.log("📦 Ejecutando cotizarCourier");
+          console.log(`   pais: ${s.origen_aeropuerto}, kg: ${s.peso_kg||0}`);
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
           if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
