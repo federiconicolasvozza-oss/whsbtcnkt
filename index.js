@@ -2584,11 +2584,12 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
           if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
           const pesoUsado = r.ajustado ? r.escalonKg : s.peso_kg;
-          const precioKg = r.totalUSD / pesoUsado;
+          const precioKg = r.totalUSD; // r.totalUSD ya es el precio por kg desde la tabla
+          const total = precioKg * pesoUsado; // Calcular el total
           const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
-          const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(pesoUsado)} kg\n*Precio por kg:* USD ${fmtUSD(precioKg)}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*${nota}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
+          const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(pesoUsado)} kg\n*Precio por kg:* USD ${fmtUSD(precioKg)}\n*Total:* USD ${fmtUSD(total)} + *Gastos Locales*${nota}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", r.totalUSD, `Courier ${s.origen_aeropuerto}`]);
+          await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", total, `Courier ${s.origen_aeropuerto}`]);
 
           // Sugerencias de conveniencia
           const sugerencias = await analizarConveniencia(s);
