@@ -29,6 +29,7 @@ const TAB_TERRESTRES = (process.env.GOOGLE_TARIFFS_TAB_TERRESTRES || "Terrestres
 const TAB_COURIER = (process.env.GOOGLE_TARIFFS_TAB_COURIER || "Courier").trim();
 const TAB_CLASIFICACION = (process.env.GOOGLE_TARIFFS_TAB_CLASIFICACION || "Clasificación").trim();
 const TAB_LOCAL = (process.env.GOOGLE_TARIFFS_TAB_FLETE_LOCAL || "Flete Local").trim();
+const TAB_NACIONAL = (process.env.GOOGLE_TARIFFS_TAB_FLETE_NACIONAL || "Flete LTL Nacional").trim();
 
 const LOG_SHEET_ID = (process.env.GOOGLE_LOG_SHEET_ID || "").trim();
 const LOG_TAB      = (process.env.GOOGLE_LOG_TAB || "Solicitudes").trim();
@@ -266,20 +267,23 @@ async function sendTypingIndicator(to, durationMs = 3000) {
 
 /* ---- Menús / rating / upsell ---- */
 const WELCOME_TEXT =
-  "⚡ *Asistente Logístico de Conektar*\n\n" +
-  "Cotizo fletes internacionales en segundos:\n" +
-  "✈️ Aéreo  •  🚢 Marítimo  •  🚚 Terrestre\n\n" +
-  "También:\n" +
-  "🧮 Costeo de importación (FOB → CIF)\n" +
-  "🚚 Transporte local Argentina\n\n" +
-  "⚠️ Cotizaciones orientativas, no reemplazan confirmación formal.\n\n" +
-  "Escribí *menu* para volver al inicio.";
+  "🚚 *Conektar - Flete Argentina*\n\n" +
+  "Cotizá tu transporte terrestre en segundos:\n\n" +
+  "🏙️ *Flete Local*\n" +
+  "   CABA y Gran Buenos Aires (hasta 100 km)\n" +
+  "   ✓ Carga y descarga incluidas\n" +
+  "   ✓ Entrega en 24-48 hs\n\n" +
+  "🗺️ *Flete LTL Nacional*\n" +
+  "   Hacia el interior del país\n" +
+  "   ✓ Hasta 10 m³ / 10 TN\n" +
+  "   ✓ Cobertura nacional\n\n" +
+  "⚠️ Cotizaciones orientativas.\n" +
+  "📧 hola@conektarsa.com";
 
 const sendMainActions = async (to) => {
-  return sendButtons(to, "¿Qué te gustaría hacer hoy?", [
-    { id:"action_cotizar",  title:"🌍 Cotiz. Flete Intl" },
-    { id:"action_calcular", title:"🧮 Costeo Impo" },
-    { id:"action_local",    title:"🚚 Flete Local" },
+  return sendButtons(to, "¿Qué servicio necesitás?", [
+    { id:"action_local",    title:"🏙️ Flete Local" },
+    { id:"action_nacional", title:"🗺️ Flete Nacional" },
   ]);
 };
 
@@ -973,6 +977,146 @@ async function analizarConveniencia(s) {
   return sugerencias.slice(0, 2);
 }
 
+/* ========= Cálculo de distancia con IA ========= */
+async function calcularDistanciaAproximada(origen, destino) {
+  if (!anthropic) {
+    console.warn("⚠️ Anthropic no configurado. No se puede calcular distancia.");
+    return null;
+  }
+
+  const prompt = `Calculá la distancia aproximada en kilómetros entre estas dos ubicaciones en Argentina:
+- Origen: ${origen}
+- Destino: ${destino}
+
+Respondé SOLO con el número de kilómetros (sin texto adicional, sin "km").
+Ejemplo: 650`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-3-5-sonnet-20241022",
+      max_tokens: 50,
+      messages: [{
+        role: "user",
+        content: prompt
+      }]
+    });
+
+    const texto = response.content[0].text.trim();
+    const km = parseInt(texto.replace(/[^\d]/g, ''));
+
+    if (isNaN(km) || km <= 0) {
+      console.error("❌ No se pudo parsear distancia:", texto);
+      return null;
+    }
+
+    console.log(`✅ Distancia ${origen} → ${destino}: ${km} km`);
+    return km;
+  } catch(e) {
+    console.error("❌ Error calculando distancia:", e?.message || e);
+    return null;
+  }
+}
+
+/* ========= Procesamiento Cotización Nacional ========= */
+async function procesarCotizacionNacional(from, s) {
+  try {
+    await sendTypingIndicator(from, 2500);
+
+    // Calcular distancia con IA
+    const distanciaKm = await calcularDistanciaAproximada(s.origen_direccion, s.nacional_destino);
+    if (distanciaKm) {
+      s.distancia_km = distanciaKm;
+    }
+
+    // Buscar tarifa en sheet
+    const rows = await readTabRange(TAR_SHEET_ID, TAB_NACIONAL, "A1:Z10000", ["nacional","ltl"]);
+    if (!rows || rows.length < 2) {
+      await sendText(from,"❌ No pude cargar las tarifas. Probá de nuevo más tarde.");
+      return;
+    }
+
+    const header = rows[0];
+    const data = rows.slice(1);
+    const iDest = headerIndex(header, "destino", "ciudad");
+    const iValorTN = headerIndex(header, "valor tn", "valor ton");
+    const iValorM3 = headerIndex(header, "valor m3", "valor m³");
+    const iMinimo = headerIndex(header, "minimo", "mínimo", "minimo a despachar");
+
+    // Buscar fila del destino
+    const row = data.find(r => norm(r[iDest]) === norm(s.nacional_destino));
+    if (!row) {
+      await sendText(from,`❌ No encontré tarifa para *${s.nacional_destino}*. Contactá a hola@conektarsa.com`);
+      return;
+    }
+
+    const valorTN = toNum(row[iValorTN]);
+    const valorM3 = toNum(row[iValorM3]);
+    const minimo = toNum(row[iMinimo]);
+
+    if (isNaN(valorTN) || isNaN(valorM3) || isNaN(minimo)) {
+      await sendText(from,"❌ Error en los valores de tarifa. Contactá a hola@conektarsa.com");
+      return;
+    }
+
+    // Calcular total: max(TN × valorTN, m³ × valorM3, minimo)
+    const costoTN = s.nacional_tn * valorTN;
+    const costoM3 = s.nacional_m3 * valorM3;
+    const total = Math.max(costoTN, costoM3, minimo);
+
+    // Construir mensaje
+    const lineas = [
+      "✅ *Cotización estimada - FLETE LTL NACIONAL*",
+      "",
+      `📦 *Carga:* ${fmt(s.nacional_m3)} m³ / ${fmt(s.nacional_tn)} TN`,
+      `📍 *Origen:* ${s.origen_direccion}`,
+      `📍 *Destino:* ${s.nacional_destino}`,
+    ];
+
+    if (s.distancia_km) {
+      lineas.push(`📏 *Distancia estimada:* ${fmt(s.distancia_km)} km`);
+    }
+
+    if (s.fecha_transporte) {
+      lineas.push(`📅 *Fecha de retiro:* ${s.fecha_transporte}`);
+    }
+
+    lineas.push("");
+    lineas.push(`💰 *Total:* $ ${fmtARS(total)}`);
+    lineas.push("");
+    lineas.push("_Valor no incluye IVA_");
+    lineas.push("");
+    lineas.push("⚠️ Cotización orientativa");
+    lineas.push("❌ No incluye carga/descarga");
+    lineas.push("");
+    lineas.push(`*Validez:* ${VALIDEZ_DIAS} días`);
+
+    await sendText(from, lineas.join("\n"));
+
+    // Log
+    await logSolicitud([
+      new Date().toISOString(),
+      from,
+      "",
+      s.empresa,
+      "whatsapp",
+      "flete_nacional",
+      `${s.nacional_m3}m³/${s.nacional_tn}tn`,
+      s.nacional_destino,
+      s.origen_direccion,
+      "",
+      "",
+      total,
+      `Nacional: ${s.origen_direccion} → ${s.nacional_destino}`
+    ]);
+
+    // Cierre: rating + menú
+    await endFlow(from);
+  } catch(e) {
+    console.error("Error en procesarCotizacionNacional:", e);
+    await sendText(from,"❌ Hubo un error procesando tu cotización. Probá de nuevo más tarde.");
+  }
+}
+
 /* ========= Clasificación automática de productos ========= */
 
 // Función para calcular similitud entre strings (Levenshtein simplificado)
@@ -1405,6 +1549,10 @@ const emptyState = () => ({
   email:null,
   // flete local
   local_cap:null, local_tipo:null, local_dist:null,
+  // flete nacional
+  nacional_destino:null, nacional_m3:null, nacional_tn:null, distancia_km:null,
+  // fecha (para ambos fletes)
+  fecha_transporte:null,
 });
 async function getS(id){
   if(!sessions.has(id)) {
@@ -1606,6 +1754,11 @@ app.post("/webhook", async (req,res)=>{
         const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
         s._localCaps = caps;
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
+      }
+      else if (btnId==="action_nacional"){
+        s.flow="nacional";
+        s.step="nacional_m3";
+        await sendText(from,"📦 *Flete LTL Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga (máximo 10 m³).\n\nEjemplo: 3.5");
       }
 
       // === Menú principal - DEBE IR ANTES del handler genérico menu_*
@@ -2109,6 +2262,24 @@ else if (btnId==="calc_go"){
         await endFlow(from);
       }
 
+      // === Flete Nacional - Button handlers ===
+      else if (/^ndest_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_destino"){
+        const title = msg.interactive?.list_reply?.title || "";
+        const destinos = Array.isArray(s._nacionalDestinos) ? s._nacionalDestinos : [];
+        const idx = Number(btnId.split("_")[1]);
+        s.nacional_destino = destinos[idx] || title;
+        s.step = "nacional_origen";
+        await sendText(from,`📍 Destino: *${s.nacional_destino}*\n\n¿Desde qué ciudad saldrá la carga? (Ciudad de origen)\n\nEjemplo: Buenos Aires`);
+      }
+      else if (btnId==="nfecha_si" && s.flow==="nacional"){
+        s.step = "nacional_fecha_input";
+        await sendText(from,"📅 Ingresá la fecha deseada para el retiro (ej.: 15/03/2025)");
+      }
+      else if (btnId==="nfecha_no" && s.flow==="nacional"){
+        s.fecha_transporte = null;
+        await procesarCotizacionNacional(from, s);
+      }
+
       if (s.step !== "cotizar") return res.sendStatus(200);
     }
 
@@ -2369,6 +2540,89 @@ else if (btnId==="calc_go"){
           { id:"lcl_api_no", title:"❌ No" },
           { id:"lcl_api_ns", title:"🤷 No lo sé" }
         ]);
+        return res.sendStatus(200);
+      }
+
+      // === Flete Nacional ===
+      if (s.step==="nacional_m3"){
+        const m3 = toNum(text);
+        if (isNaN(m3) || m3 <= 0) {
+          await sendText(from,"⚠️ Ingresá un *número válido* para m³ (ej.: 3.5).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
+        if (m3 > 10) {
+          await sendText(from,
+            `⚠️ *${fmt(m3)} m³ supera el límite de 10 m³ para LTL.*\n\n` +
+            `Para cargas de este volumen te recomendamos *FTL (camión completo)*.\n\n` +
+            `📧 Contactanos para una cotización personalizada:\nhola@conektarsa.com`
+          );
+          await endFlow(from);
+          return res.sendStatus(200);
+        }
+        s.nacional_m3 = m3;
+        s.step = "nacional_tn";
+        await sendText(from,"⚖️ Ahora ingresá las *TONELADAS (TN)* (máximo 10 TN).\n\nEjemplo: 2.5");
+        return res.sendStatus(200);
+      }
+      if (s.step==="nacional_tn"){
+        const tn = toNum(text);
+        if (isNaN(tn) || tn <= 0) {
+          await sendText(from,"⚠️ Ingresá un *número válido* para toneladas (ej.: 2.5).\nNo uses letras ni símbolos.");
+          return res.sendStatus(200);
+        }
+        if (tn > 10) {
+          await sendText(from,
+            `⚠️ *${fmt(tn)} TN supera el límite de 10 TN para LTL.*\n\n` +
+            `Para cargas de este peso te recomendamos *FTL (camión completo)*.\n\n` +
+            `📧 Contactanos para una cotización personalizada:\nhola@conektarsa.com`
+          );
+          await endFlow(from);
+          return res.sendStatus(200);
+        }
+        s.nacional_tn = tn;
+
+        // Cargar destinos desde sheet
+        try {
+          const rows = await readTabRange(TAR_SHEET_ID, TAB_NACIONAL, "A1:Z10000", ["nacional","ltl"]);
+          if (!rows || rows.length < 2) {
+            await sendText(from,"❌ No pude cargar los destinos disponibles. Probá de nuevo más tarde.");
+            return res.sendStatus(200);
+          }
+          const header = rows[0];
+          const data = rows.slice(1);
+          const iDest = headerIndex(header, "destino", "ciudad");
+          const destinos = [...new Set(data.map(r => r[iDest]).filter(Boolean))];
+
+          if (destinos.length === 0) {
+            await sendText(from,"❌ No hay destinos configurados. Contactá a hola@conektarsa.com");
+            return res.sendStatus(200);
+          }
+
+          s._nacionalDestinos = destinos;
+          s.step = "nacional_destino";
+
+          // Mostrar lista de destinos
+          const rows_list = destinos.slice(0,10).map((d,i)=>({id:`ndest_${i}`, title:clip24(d)}));
+          await sendList(from, "📍 Elegí el *destino* (ciudad):", rows_list, "Destinos", "Elegir");
+        } catch(e) {
+          console.error("Error cargando destinos nacionales:", e);
+          await sendText(from,"❌ Hubo un error cargando los destinos. Probá de nuevo más tarde.");
+        }
+        return res.sendStatus(200);
+      }
+      if (s.step==="nacional_origen"){
+        s.origen_direccion = text.trim();
+        s.step = "nacional_fecha_ask";
+        await sendButtons(from, "📅 ¿Querés programar una fecha de retiro?", [
+          { id:"nfecha_si", title:"✅ Sí" },
+          { id:"nfecha_no", title:"❌ No" }
+        ]);
+        return res.sendStatus(200);
+      }
+      if (s.step==="nacional_fecha_input"){
+        s.fecha_transporte = text.trim();
+        // Procesar cotización
+        await procesarCotizacionNacional(from, s);
         return res.sendStatus(200);
       }
 
