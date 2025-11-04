@@ -2605,8 +2605,12 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
               await sleep(300);
             }
           }
-          s.step = "ask_email";
-          await sendText(from, "📧 ¿Deseás que te enviemos la cotización por correo?\nDejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
+          // Preguntar si desea email con botones (igual que otros flujos)
+          s.step = "ask_if_email";
+          await sendButtons(from, "📧 ¿Deseás que te enviemos la cotización por correo?", [
+            { id:"email_si", title:"✅ Sí" },
+            { id:"email_no", title:"❌ No" }
+          ]);
           return res.sendStatus(200);
         } else if (s.modo==="maritimo"){
           if (s.maritimo_tipo==="LCL"){ 
