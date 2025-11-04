@@ -970,14 +970,6 @@ async function analizarConveniencia(s) {
     }
   }
 
-  // ===== COURIER =====
-  // 12. Courier > 30 kg → Aéreo general
-  if (s.modo === "aereo" && s.aereo_tipo === "courier" && (Number(s.peso_kg) || 0) > 30) {
-    sugerencias.push(
-      `💡 Para >30 kg, aéreo general suele ser 40-50% más económico que courier. ¿Querés que te cotice aéreo normal?`
-    );
-  }
-
   return sugerencias.slice(0, 2);
 }
 
@@ -2591,10 +2583,12 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
           console.log(`   pais: ${s.origen_aeropuerto}, kg: ${s.peso_kg||0}`);
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
           if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
-          const nota = r.ajustado ? `\n*Nota:* ajustado al escalón de ${r.escalonKg} kg.` : "";
-          const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(s.peso_kg)} kg${nota}\n*Total:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
+          const pesoUsado = r.ajustado ? r.escalonKg : s.peso_kg;
+          const precioKg = r.totalUSD; // r.totalUSD ya es el precio por kg desde la tabla
+          const total = precioKg * pesoUsado; // Calcular el total
+          const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(pesoUsado)} kg\n*Precio por kg:* USD ${fmtUSD(precioKg)}\n*Total:* USD ${fmtUSD(total)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
-          await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", r.totalUSD, `Courier ${s.origen_aeropuerto}`]);
+          await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", total, `Courier ${s.origen_aeropuerto}`]);
 
           // Sugerencias de conveniencia
           const sugerencias = await analizarConveniencia(s);
