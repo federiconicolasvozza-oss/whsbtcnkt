@@ -196,6 +196,27 @@ const isCorporateEmail = (mail) => {
   return dom && !FREE_MAILS.includes(dom);
 };
 
+/* ========= Mapeo de Regiones para Flete Nacional ========= */
+const REGIONES_DESTINO = {
+  "Patagonia": ["neuquen", "rio negro", "chubut", "santa cruz", "tierra del fuego", "viedma", "bariloche", "comodoro rivadavia", "rio gallegos", "ushuaia", "trelew", "puerto madryn", "esquel"],
+  "NOA": ["salta", "jujuy", "tucuman", "catamarca", "santiago del estero", "la rioja"],
+  "Centro": ["cordoba", "santa fe", "rosario", "entre rios", "parana", "villa maria", "rio cuarto", "santa fe capital", "concordia", "gualeguaychu"],
+  "Cuyo": ["mendoza", "san juan", "san luis"],
+  "Litoral": ["formosa", "chaco", "corrientes", "misiones", "resistencia", "posadas"]
+};
+
+function detectarRegion(ciudad) {
+  const c = norm(ciudad);
+  for (const [region, ciudades] of Object.entries(REGIONES_DESTINO)) {
+    for (const keyword of ciudades) {
+      if (c.includes(keyword) || keyword.includes(c)) {
+        return region;
+      }
+    }
+  }
+  return "Centro"; // Default
+}
+
 /* ========= WhatsApp ========= */
 async function sendMessage(payload) {
   const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
@@ -269,21 +290,21 @@ async function sendTypingIndicator(to, durationMs = 3000) {
 const WELCOME_TEXT =
   "🚚 *Conektar - Flete Argentina*\n\n" +
   "Cotizá tu transporte terrestre en segundos:\n\n" +
-  "🏙️ *Flete Local*\n" +
-  "   CABA y Gran Buenos Aires (hasta 100 km)\n" +
+  "🚛 *Cotización Flete AMBA*\n" +
+  "   📍 CABA y Gran Buenos Aires\n" +
   "   ✓ Carga y descarga incluidas\n" +
-  "   ✓ Entrega en 24-48 hs\n\n" +
-  "🗺️ *Flete LTL Nacional*\n" +
-  "   Hacia el interior del país\n" +
-  "   ✓ Hasta 10 m³ / 10 TN\n" +
-  "   ✓ Cobertura nacional\n\n" +
-  "⚠️ Cotizaciones orientativas.\n" +
+  "   ✓ Hasta 100 km\n\n" +
+  "🚚 *Flete Nacional*\n" +
+  "   📦 Hacia el interior del país\n" +
+  "   ✓ Cobertura nacional\n" +
+  "   ✓ Hasta 10 m³ / 10 TN\n\n" +
+  "⚠️ *Cotizaciones orientativas*\n" +
   "📧 hola@conektarsa.com";
 
 const sendMainActions = async (to) => {
   return sendButtons(to, "¿Qué servicio necesitás?", [
-    { id:"action_local",    title:"🏙️ Flete Local" },
-    { id:"action_nacional", title:"🗺️ Flete Nacional" },
+    { id:"action_amba",     title:"🚛 Flete AMBA" },
+    { id:"action_nacional", title:"🚚 Flete Nacional" },
   ]);
 };
 
@@ -1065,7 +1086,7 @@ async function procesarCotizacionNacional(from, s) {
 
     // Construir mensaje
     const lineas = [
-      "✅ *Cotización estimada - FLETE LTL NACIONAL*",
+      "🚚 *Cotización Flete Nacional*",
       "",
       `📦 *Carga:* ${fmt(s.nacional_m3)} m³ / ${fmt(s.nacional_tn)} TN`,
       `📍 *Origen:* ${s.origen_direccion}`,
@@ -1073,20 +1094,19 @@ async function procesarCotizacionNacional(from, s) {
     ];
 
     if (s.distancia_km) {
-      lineas.push(`📏 *Distancia estimada:* ${fmt(s.distancia_km)} km`);
+      lineas.push(`📏 *Distancia:* ${fmt(s.distancia_km)} km`);
     }
 
     if (s.fecha_transporte) {
-      lineas.push(`📅 *Fecha de retiro:* ${s.fecha_transporte}`);
+      lineas.push(`📅 *Fecha de envío:* ${s.fecha_transporte}`);
     }
 
     lineas.push("");
     lineas.push(`💰 *Total:* $ ${fmtARS(total)}`);
     lineas.push("");
     lineas.push("_Valor no incluye IVA_");
-    lineas.push("");
-    lineas.push("⚠️ Cotización orientativa");
-    lineas.push("❌ No incluye carga/descarga");
+    lineas.push("⚠️ *Cotización orientativa*");
+    lineas.push("❌ *No incluye* carga/descarga");
     lineas.push("");
     lineas.push(`*Validez:* ${VALIDEZ_DIAS} días`);
 
@@ -1750,7 +1770,7 @@ app.post("/webhook", async (req,res)=>{
       // ===== Menú principal
       if (btnId==="action_cotizar"){ s.flow=null; s.step="choose_modo"; await sendModos(from); }
       else if (btnId==="action_calcular"){ s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from); }
-      else if (btnId==="action_local"){ s.flow="local"; s.step="local_cap";
+      else if (btnId==="action_amba" || btnId==="action_local"){ s.flow="local"; s.step="local_cap";
         const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
         s._localCaps = caps;
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
@@ -1758,7 +1778,7 @@ app.post("/webhook", async (req,res)=>{
       else if (btnId==="action_nacional"){
         s.flow="nacional";
         s.step="nacional_m3";
-        await sendText(from,"📦 *Flete LTL Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga (máximo 10 m³).\n\nEjemplo: 3.5");
+        await sendText(from,"📦 *Flete Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga.\n\nEjemplo: 3.5");
       }
 
       // === Menú principal - DEBE IR ANTES del handler genérico menu_*
@@ -2243,41 +2263,84 @@ else if (btnId==="calc_go"){
 
         const col = distKey==="CABA"?iCABA:distKey==="BS30"?i30:distKey==="BS50"?i50:distKey==="BS70"?i70:i100;
         const monto = toNum(row[col]);
+
+        // Guardar datos para usar después
+        s._local_monto = monto;
+        s._local_distTitle = title;
+        s._local_vehiculo = row[iVeh];
+
         const texto = [
-          "✅ *Tarifa estimada (FLETE LOCAL)*",
-          `Capacidad: *${s.local_cap}*`,
-          `Tipo: *${s.local_tipo==="refrig"?"Refrigerada":s.local_tipo==="pelig"?"IMO / Peligrosa":"Carga Seca"}*`,
-          `Distancia: *${title}*`,
-          row[iVeh] ? `Vehículo: ${row[iVeh]}` : "",
+          "🚛 *Cotización Flete AMBA*",
           "",
-          `*Total:* $ ${fmtARS(monto)}`,
+          `📦 *Capacidad:* ${s.local_cap}`,
+          `🏷️ *Tipo:* ${s.local_tipo==="refrig"?"Refrigerada":s.local_tipo==="pelig"?"IMO / Peligrosa":"Carga Seca"}`,
+          `📍 *Distancia:* ${title}`,
+          row[iVeh] ? `🚚 *Vehículo:* ${row[iVeh]}` : "",
           "",
-          "_Nota: el valor no incluye IVA._"
+          `💰 *Total:* $ ${fmtARS(monto)}`,
+          "",
+          "_Valor no incluye IVA_",
+          "",
+          `*Validez:* ${VALIDEZ_DIAS} días`
         ].filter(Boolean).join("\n");
         await sendText(from, texto);
 
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","flete_local", s.local_cap, title, "", "", s.local_tipo, monto, "Flete local"]);
 
-        // cierre: rating + menú
-        await endFlow(from);
+        // Preguntar por fecha de retiro
+        s.step = "local_fecha_ask";
+        await sendButtons(from, "📅 ¿Querés programar una fecha de RETIRO?", [
+          { id:"lfecha_si", title:"✅ Sí" },
+          { id:"lfecha_no", title:"❌ No" }
+        ]);
       }
 
       // === Flete Nacional - Button handlers ===
+      // Handler de selección de región
+      else if (/^nreg_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_region"){
+        const regiones = ["Patagonia", "NOA", "Centro", "Cuyo", "Litoral"];
+        const idx = Number(btnId.split("_")[1]);
+        const regionSeleccionada = regiones[idx];
+        s._regionSeleccionada = regionSeleccionada;
+
+        // Mostrar destinos de esa región
+        const destinosRegion = s._destinosPorRegion[regionSeleccionada] || [];
+        if (destinosRegion.length === 0) {
+          await sendText(from,`❌ No hay destinos en ${regionSeleccionada}. Contactá a hola@conektarsa.com`);
+          return res.sendStatus(200);
+        }
+
+        s.step = "nacional_destino";
+        const rows_list = destinosRegion.slice(0,10).map((d,i)=>({id:`ndest_${i}`, title:clip24(d)}));
+        await sendList(from, `📍 Elegí la ciudad en *${regionSeleccionada}*:`, rows_list, "Destinos", "Elegir");
+      }
+      // Handler de selección de ciudad
       else if (/^ndest_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_destino"){
         const title = msg.interactive?.list_reply?.title || "";
-        const destinos = Array.isArray(s._nacionalDestinos) ? s._nacionalDestinos : [];
+        const destinosRegion = s._destinosPorRegion[s._regionSeleccionada] || [];
         const idx = Number(btnId.split("_")[1]);
-        s.nacional_destino = destinos[idx] || title;
+        s.nacional_destino = destinosRegion[idx] || title;
         s.step = "nacional_origen";
         await sendText(from,`📍 Destino: *${s.nacional_destino}*\n\n¿Desde qué ciudad saldrá la carga? (Ciudad de origen)\n\nEjemplo: Buenos Aires`);
       }
       else if (btnId==="nfecha_si" && s.flow==="nacional"){
         s.step = "nacional_fecha_input";
-        await sendText(from,"📅 Ingresá la fecha deseada para el retiro (ej.: 15/03/2025)");
+        await sendText(from,"📅 Ingresá la fecha deseada para el ENVÍO (ej.: 15/03/2025)");
       }
       else if (btnId==="nfecha_no" && s.flow==="nacional"){
         s.fecha_transporte = null;
         await procesarCotizacionNacional(from, s);
+      }
+
+      // === Flete AMBA (Local) - Button handlers para fecha ===
+      else if (btnId==="lfecha_si" && s.flow==="local"){
+        s.step = "local_fecha_input";
+        await sendText(from,"📅 Ingresá la fecha deseada para el RETIRO (ej.: 15/03/2025)");
+      }
+      else if (btnId==="lfecha_no" && s.flow==="local"){
+        s.fecha_transporte = null;
+        // Finalizar flujo AMBA
+        await endFlow(from);
       }
 
       if (s.step !== "cotizar") return res.sendStatus(200);
@@ -2561,7 +2624,7 @@ else if (btnId==="calc_go"){
         }
         s.nacional_m3 = m3;
         s.step = "nacional_tn";
-        await sendText(from,"⚖️ Ahora ingresá las *TONELADAS (TN)* (máximo 10 TN).\n\nEjemplo: 2.5");
+        await sendText(from,"⚖️ Ahora ingresá las *TONELADAS (TN)* de tu carga.\n\nEjemplo: 2.5");
         return res.sendStatus(200);
       }
       if (s.step==="nacional_tn"){
@@ -2581,7 +2644,7 @@ else if (btnId==="calc_go"){
         }
         s.nacional_tn = tn;
 
-        // Cargar destinos desde sheet
+        // Cargar destinos desde sheet y organizarlos por región
         try {
           const rows = await readTabRange(TAR_SHEET_ID, TAB_NACIONAL, "A1:Z10000", ["nacional","ltl"]);
           if (!rows || rows.length < 2) {
@@ -2598,12 +2661,29 @@ else if (btnId==="calc_go"){
             return res.sendStatus(200);
           }
 
+          // Guardar todos los destinos en sesión
           s._nacionalDestinos = destinos;
-          s.step = "nacional_destino";
 
-          // Mostrar lista de destinos
-          const rows_list = destinos.slice(0,10).map((d,i)=>({id:`ndest_${i}`, title:clip24(d)}));
-          await sendList(from, "📍 Elegí el *destino* (ciudad):", rows_list, "Destinos", "Elegir");
+          // Agrupar por región
+          s._destinosPorRegion = {};
+          for (const dest of destinos) {
+            const region = detectarRegion(dest);
+            if (!s._destinosPorRegion[region]) {
+              s._destinosPorRegion[region] = [];
+            }
+            s._destinosPorRegion[region].push(dest);
+          }
+
+          // Mostrar selector de región (Patagonia primero)
+          s.step = "nacional_region";
+          const regiones = ["Patagonia", "NOA", "Centro", "Cuyo", "Litoral"].filter(r => s._destinosPorRegion[r]?.length > 0);
+          const regionRows = regiones.map((r,i) => ({
+            id: `nreg_${i}`,
+            title: `${r} (${s._destinosPorRegion[r].length})`,
+            description: `${s._destinosPorRegion[r].length} destinos`
+          }));
+
+          await sendList(from, "📍 Elegí la *región* de destino:", regionRows, "Regiones", "Elegir");
         } catch(e) {
           console.error("Error cargando destinos nacionales:", e);
           await sendText(from,"❌ Hubo un error cargando los destinos. Probá de nuevo más tarde.");
@@ -2613,7 +2693,7 @@ else if (btnId==="calc_go"){
       if (s.step==="nacional_origen"){
         s.origen_direccion = text.trim();
         s.step = "nacional_fecha_ask";
-        await sendButtons(from, "📅 ¿Querés programar una fecha de retiro?", [
+        await sendButtons(from, "📅 ¿Querés programar una fecha de ENVÍO?", [
           { id:"nfecha_si", title:"✅ Sí" },
           { id:"nfecha_no", title:"❌ No" }
         ]);
@@ -2623,6 +2703,14 @@ else if (btnId==="calc_go"){
         s.fecha_transporte = text.trim();
         // Procesar cotización
         await procesarCotizacionNacional(from, s);
+        return res.sendStatus(200);
+      }
+      if (s.step==="local_fecha_input"){
+        s.fecha_transporte = text.trim();
+        // Confirmar fecha y finalizar
+        await sendText(from,`✅ Fecha de retiro programada: *${s.fecha_transporte}*\n\n¡Gracias por usar Conektar! Un representante te contactará para coordinar los detalles.`);
+        await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","flete_local_fecha", s.local_cap, s._local_distTitle, "", "", s.local_tipo, s._local_monto, `Fecha retiro: ${s.fecha_transporte}`]);
+        await endFlow(from);
         return res.sendStatus(200);
       }
 
