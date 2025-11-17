@@ -288,16 +288,18 @@ async function sendTypingIndicator(to, durationMs = 3000) {
 
 /* ---- Menús / rating / upsell ---- */
 const WELCOME_TEXT =
-  "🚚 *Conektar - Flete Argentina*\n\n" +
-  "Cotizá tu transporte terrestre en segundos:\n\n" +
-  "🚛 *Cotización Flete AMBA*\n" +
+  "🚚 *Conektar - Logística Integral*\n\n" +
+  "Cotizá y calculá tus envíos:\n\n" +
+  "🚛 *Flete AMBA*\n" +
   "   📍 CABA y Gran Buenos Aires\n" +
-  "   ✓ Carga y descarga incluidas\n" +
-  "   ✓ Hasta 100 km\n\n" +
+  "   ✓ Carga/descarga incluidas\n\n" +
   "🚚 *Flete Nacional*\n" +
-  "   📦 Hacia el interior del país\n" +
-  "   ✓ Cobertura nacional\n" +
+  "   📦 Interior del país\n" +
   "   ✓ Hasta 10 m³ / 10 TN\n\n" +
+  "🌍 *Flete Internacional*\n" +
+  "   ✈️ Aéreo • 🚢 Marítimo • 🚛 Terrestre\n\n" +
+  "🧮 *Calculadora de Importación*\n" +
+  "   💰 FOB → Costo final\n\n" +
   "⚠️ *Cotizaciones orientativas*\n" +
   "📧 hola@conektarsa.com";
 
@@ -305,6 +307,15 @@ const sendMainActions = async (to) => {
   return sendButtons(to, "¿Qué servicio necesitás?", [
     { id:"action_amba",     title:"🚛 Flete AMBA" },
     { id:"action_nacional", title:"🚚 Flete Nacional" },
+    { id:"action_mas",      title:"🌍 Más servicios..." },
+  ]);
+};
+
+const sendMasServicios = async (to) => {
+  return sendButtons(to, "Otros servicios disponibles:", [
+    { id:"action_internacional", title:"🌍 Flete Intl." },
+    { id:"action_calculadora",   title:"🧮 Calculadora" },
+    { id:"menu_si",              title:"🔙 Volver" },
   ]);
 };
 
@@ -1700,7 +1711,7 @@ app.post("/webhook", async (req,res)=>{
       if (s.welcomed) return;
       s.welcomed = true;
       await sendImage(from, LOGO_URL, "");
-      await sleep(400);
+      await sendTypingIndicator(from, 1500);
 
       // Si ya tiene empresa guardada → bienvenida personalizada
       if (s.empresa) {
@@ -1723,13 +1734,13 @@ app.post("/webhook", async (req,res)=>{
         }
 
         await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!`);
-        await sleep(400);
+        await sendTypingIndicator(from, 800);
         await sendMainActions(from);
         s.step = "main";
       } else {
         // Usuario nuevo → bienvenida completa
         await sendText(from, WELCOME_TEXT);
-        await sleep(400);
+        await sendTypingIndicator(from, 1000);
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
         s.step = "ask_empresa";
         s.askedEmpresa = true;
@@ -1768,17 +1779,30 @@ app.post("/webhook", async (req,res)=>{
     if (type==="interactive") {
 
       // ===== Menú principal
-      if (btnId==="action_cotizar"){ s.flow=null; s.step="choose_modo"; await sendModos(from); }
-      else if (btnId==="action_calcular"){ s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from); }
-      else if (btnId==="action_amba" || btnId==="action_local"){ s.flow="local"; s.step="local_cap";
+      if (btnId==="action_amba" || btnId==="action_local"){
+        await sendTypingIndicator(from, 800);
+        s.flow="local"; s.step="local_cap";
         const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
         s._localCaps = caps;
         await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
       }
       else if (btnId==="action_nacional"){
+        await sendTypingIndicator(from, 800);
         s.flow="nacional";
         s.step="nacional_m3";
         await sendText(from,"📦 *Flete Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga.\n\nEjemplo: 3.5");
+      }
+      else if (btnId==="action_mas"){
+        await sendTypingIndicator(from, 800);
+        await sendMasServicios(from);
+      }
+      else if (btnId==="action_internacional" || btnId==="action_cotizar"){
+        await sendTypingIndicator(from, 800);
+        s.flow=null; s.step="choose_modo"; await sendModos(from);
+      }
+      else if (btnId==="action_calculadora" || btnId==="action_calcular"){
+        await sendTypingIndicator(from, 800);
+        s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from);
       }
 
       // === Menú principal - DEBE IR ANTES del handler genérico menu_*
@@ -1794,6 +1818,7 @@ app.post("/webhook", async (req,res)=>{
 
       // ===== Cotizador clásico (modos de transporte)
       else if (btnId.startsWith("menu_") && btnId !== "menu_si" && btnId !== "menu_no"){
+        await sendTypingIndicator(from, 800);
         s.modo = btnId.replace("menu_","");
         if (s.modo==="maritimo"){ s.step="mar_tipo"; await sendTiposMaritimo(from); }
         if (s.modo==="aereo"){
@@ -2504,7 +2529,9 @@ else if (btnId==="calc_go"){
       if (s.step==="ask_empresa"){
         s.empresa = text;
         await saveUserEmpresa(from, text);
+        await sendTypingIndicator(from, 800);
         await sendText(from, `Gracias. Empresa guardada: *${s.empresa}*`);
+        await sendTypingIndicator(from, 800);
         await sendMainActions(from);
         s.step="main";
         return res.sendStatus(200);
