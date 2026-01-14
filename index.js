@@ -1798,6 +1798,7 @@ app.post("/webhook", async (req,res)=>{
       }
       else if (btnId==="action_internacional" || btnId==="action_cotizar"){
         await sendTypingIndicator(from, 800);
+        await sendText(from, "⚠️ *Importante:*\nLas tarifas mostradas son estimativas y no constituyen una cotización formal.\n\nRecibirás una cotización oficial por correo de parte de nuestro equipo.");
         s.flow=null; s.step="choose_modo"; await sendModos(from);
       }
       else if (btnId==="action_calculadora" || btnId==="action_calcular"){
