@@ -305,9 +305,9 @@ const WELCOME_TEXT =
 
 const sendMainActions = async (to) => {
   return sendButtons(to, "¿Qué servicio necesitás?", [
-    { id:"action_amba",     title:"🚛 Flete AMBA" },
-    { id:"action_nacional", title:"🚚 Flete Nacional" },
-    { id:"action_mas",      title:"🌍 Más servicios..." },
+    { id:"action_amba",          title:"🚛 Flete AMBA" },
+    { id:"action_nacional",      title:"🚚 Flete Nacional" },
+    { id:"action_internacional", title:"🌍 Flete Internacional" },
   ]);
 };
 
