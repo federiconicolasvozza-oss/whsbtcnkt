@@ -2734,11 +2734,21 @@ else if (btnId==="calc_go"){
 
           // Mostrar selector de región (nuevo orden)
           s.step = "nacional_region";
+          const iconosRegion = {
+            "Patagonia Norte": "🏔️",
+            "Patagonia Atlántica": "🌊",
+            "Patagonia Sur": "❄️",
+            "Cuyo": "🍷",
+            "Centro": "🏛️",
+            "NOA": "🌄",
+            "Pampeana": "🌾",
+            "Litoral": "🌿"
+          };
           const ordenRegiones = ["Patagonia Norte", "Patagonia Atlántica", "Patagonia Sur", "Cuyo", "Centro", "NOA", "Pampeana", "Litoral"];
           const regiones = ordenRegiones.filter(r => s._destinosPorRegion[r]?.length > 0);
           const regionRows = regiones.map((r,i) => ({
             id: `nreg_${i}`,
-            title: `${r} (${s._destinosPorRegion[r].length})`,
+            title: `${iconosRegion[r] || "📍"} ${r} (${s._destinosPorRegion[r].length})`,
             description: `${s._destinosPorRegion[r].length} destinos`
           }));
 
