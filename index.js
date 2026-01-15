@@ -2748,8 +2748,8 @@ else if (btnId==="calc_go"){
           const regiones = ordenRegiones.filter(r => s._destinosPorRegion[r]?.length > 0);
           const regionRows = regiones.map((r,i) => ({
             id: `nreg_${i}`,
-            title: `${iconosRegion[r] || "📍"} ${r} (${s._destinosPorRegion[r].length})`,
-            description: `${s._destinosPorRegion[r].length} destinos`
+            title: `${iconosRegion[r] || "📍"} ${r}`,
+            description: `${s._destinosPorRegion[r].length} destinos disponibles`
           }));
 
           await sendList(from, "📍 Elegí la *región* de destino:", regionRows, "Regiones", "Elegir");
