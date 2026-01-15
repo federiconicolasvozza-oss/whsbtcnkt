@@ -198,11 +198,27 @@ const isCorporateEmail = (mail) => {
 
 /* ========= Mapeo de Regiones para Flete Nacional ========= */
 const REGIONES_DESTINO = {
-  "Patagonia": ["neuquen", "rio negro", "chubut", "santa cruz", "tierra del fuego", "viedma", "bariloche", "comodoro rivadavia", "rio gallegos", "ushuaia", "trelew", "puerto madryn", "esquel"],
-  "NOA": ["salta", "jujuy", "tucuman", "catamarca", "santiago del estero", "la rioja"],
-  "Centro": ["cordoba", "santa fe", "rosario", "entre rios", "parana", "villa maria", "rio cuarto", "santa fe capital", "concordia", "gualeguaychu"],
-  "Cuyo": ["mendoza", "san juan", "san luis"],
-  "Litoral": ["formosa", "chaco", "corrientes", "misiones", "resistencia", "posadas"]
+  "Patagonia Norte": [
+    "neuquen", "bariloche", "san martin de los andes", "zapala", "cutral co",
+    "villa regina", "chos malal", "el bolson", "junin de los andes",
+    "villa la angostura", "rincon de los sauces", "anelo", "piedra del aguila",
+    "rio negro", "choele choel", "viedma", "catriel", "general roca",
+    "san antonio oeste", "ingeniero jacobacci", "rio colorado", "sierra grande"
+  ],
+  "Patagonia Atlántica": [
+    "trelew", "puerto madryn", "comodoro rivadavia", "caleta olivia",
+    "pico truncado", "rawson", "sarmiento"
+  ],
+  "Patagonia Sur": [
+    "rio gallegos", "rio grande", "rio turbio", "san julian", "puerto deseado",
+    "perito moreno", "calafate", "ushuaia", "cte piedra buena", "pto santa cruz",
+    "comandante piedra buena", "puerto santa cruz"
+  ],
+  "Cuyo": ["mendoza", "san juan", "san rafael"],
+  "Centro": ["cordoba", "rio cuarto", "rosario"],
+  "NOA": ["salta", "jujuy", "tucuman", "catamarca", "cafayate"],
+  "Pampeana": ["bahia blanca", "mar del plata", "olavarria", "la pampa"],
+  "Litoral": ["resistencia"]
 };
 
 function detectarRegion(ciudad) {
@@ -2324,7 +2340,7 @@ else if (btnId==="calc_go"){
       // === Flete Nacional - Button handlers ===
       // Handler de selección de región
       else if (/^nreg_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_region"){
-        const regiones = ["Patagonia", "NOA", "Centro", "Cuyo", "Litoral"];
+        const regiones = ["Patagonia Norte", "Patagonia Atlántica", "Patagonia Sur", "Cuyo", "Centro", "NOA", "Pampeana", "Litoral"];
         const idx = Number(btnId.split("_")[1]);
         const regionSeleccionada = regiones[idx];
         s._regionSeleccionada = regionSeleccionada;
@@ -2682,6 +2698,10 @@ else if (btnId==="calc_go"){
           const header = rows[0];
           const data = rows.slice(1);
           const iDest = headerIndex(header, "destino", "ciudad");
+          const iRegion = headerIndex(header, "region", "zona");
+
+          // Guardar filas completas con región si existe
+          s._nacionalData = data;
           const destinos = [...new Set(data.map(r => r[iDest]).filter(Boolean))];
 
           if (destinos.length === 0) {
@@ -2692,19 +2712,30 @@ else if (btnId==="calc_go"){
           // Guardar todos los destinos en sesión
           s._nacionalDestinos = destinos;
 
-          // Agrupar por región
+          // Agrupar por región (leer de columna si existe, sino detectar automáticamente)
           s._destinosPorRegion = {};
-          for (const dest of destinos) {
-            const region = detectarRegion(dest);
+          for (const row of data) {
+            const dest = row[iDest];
+            if (!dest) continue;
+
+            // Leer región desde planilla o detectar automáticamente
+            let region = iRegion >= 0 ? row[iRegion]?.trim() : null;
+            if (!region) {
+              region = detectarRegion(dest);
+            }
+
             if (!s._destinosPorRegion[region]) {
               s._destinosPorRegion[region] = [];
             }
-            s._destinosPorRegion[region].push(dest);
+            if (!s._destinosPorRegion[region].includes(dest)) {
+              s._destinosPorRegion[region].push(dest);
+            }
           }
 
-          // Mostrar selector de región (Patagonia primero)
+          // Mostrar selector de región (nuevo orden)
           s.step = "nacional_region";
-          const regiones = ["Patagonia", "NOA", "Centro", "Cuyo", "Litoral"].filter(r => s._destinosPorRegion[r]?.length > 0);
+          const ordenRegiones = ["Patagonia Norte", "Patagonia Atlántica", "Patagonia Sur", "Cuyo", "Centro", "NOA", "Pampeana", "Litoral"];
+          const regiones = ordenRegiones.filter(r => s._destinosPorRegion[r]?.length > 0);
           const regionRows = regiones.map((r,i) => ({
             id: `nreg_${i}`,
             title: `${r} (${s._destinosPorRegion[r].length})`,
