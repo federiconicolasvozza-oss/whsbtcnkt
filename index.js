@@ -1,5 +1,5 @@
 // index.js — Conektar S.A. • Bot Cotizaciones + Costeo Importe + Flete Local
-// v4.0 — Flete Local ($ ARS), rating+EXW+Despachante+Email log, courier PF/Empresa, títulos árbol, formato CIF
+// v4.1 — UX Etapa 1: menú lista, calculadora visible, recordatorios, mensajes de error mejorados
 
 import express from "express";
 import dotenv from "dotenv";
@@ -50,16 +50,16 @@ const RATE_IIGG        = Number(process.env.RATE_IIGG        ?? 0.06);
 
 /* Sistema de clasificación automática */
 const UMBRAL_CONFIANZA = {
-  AUTO_CLASIFICAR: 20,      // Score >= 20 → Clasifica directo (2 matches exactos o más)
-  MOSTRAR_OPCIONES: 10,     // Score >= 10 → Muestra con confirmación (1 match exacto)
-  ESCALAR_ASESOR: 0         // Score < 10 → Escala a humano
+  AUTO_CLASIFICAR: 20,
+  MOSTRAR_OPCIONES: 10,
+  ESCALAR_ASESOR: 0
 };
 
 const PUNTOS_MATCH = {
-  MATCH_EXACTO: 10,         // Palabra exacta en TAG
-  MATCH_PARCIAL: 5,         // Substring en TAG
-  MATCH_FUZZY_85: 3,        // Similitud >= 85%
-  MATCH_FUZZY_70: 1         // Similitud >= 70%
+  MATCH_EXACTO: 10,
+  MATCH_PARCIAL: 5,
+  MATCH_FUZZY_85: 3,
+  MATCH_FUZZY_70: 1
 };
 
 // Whitelist de dominios permitidos para links
@@ -69,7 +69,6 @@ const DOMINIOS_PERMITIDOS = [
   'amazon.com', 'amazon.com.br', 'amazon.es', 'amazon.com.mx',
   'alibaba.com',
   'ebay.com', 'ebay.com.ar',
-  // Fabricantes conocidos
   'sony.com', 'samsung.com', 'lg.com', 'apple.com',
   'nike.com', 'adidas.com', 'puma.com',
   'lenovo.com', 'dell.com', 'hp.com', 'asus.com'
@@ -132,27 +131,16 @@ const norm = s => (s||"").toString().toLowerCase()
   .normalize("NFD").replace(/\p{Diacritic}/gu,"")
   .replace(/[^\p{L}\p{N}\s()]/gu,"").replace(/\s+/g," ").trim();
 
-// ✅ Parser robusto: coma/punto/miles
 const toNum = (s) => {
   if (typeof s === "number") return s;
   if (!s) return NaN;
-
   let str = String(s).trim();
   const original = str;
-
   str = str.replace(/[^\d.,-]/g, "");
-
-  if (!str || str === "-" || str === "." || str === ",") {
-    return NaN;
-  }
-
-  if (!/\d/.test(original)) {
-    return NaN;
-  }
-
+  if (!str || str === "-" || str === "." || str === ",") return NaN;
+  if (!/\d/.test(original)) return NaN;
   const hasDot = str.includes(".");
   const hasComma = str.includes(",");
-
   if (hasDot && hasComma) {
     str = str.replace(/\./g, "").replace(",", ".");
   } else if (hasComma && !hasDot) {
@@ -162,7 +150,6 @@ const toNum = (s) => {
     str = str.replace(/\./g, "");
     if (last !== -1) str = str.slice(0,last) + "." + str.slice(last);
   }
-
   const n = Number(str);
   return isFinite(n) ? n : NaN;
 };
@@ -174,7 +161,7 @@ const fmtUSD = n => isFinite(n)
 const fmtARS = n => isFinite(n)
   ? Number(n).toLocaleString("es-AR",{minimumFractionDigits:2, maximumFractionDigits:2})
   : "0,00";
-// formato simple para números (ej: m³, kg)
+
 const fmt = (n) => isFinite(n)
   ? Number(n).toLocaleString("es-AR", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
   : "0";
@@ -195,6 +182,10 @@ const isCorporateEmail = (mail) => {
   const dom = String(mail).trim().toLowerCase().split("@")[1];
   return dom && !FREE_MAILS.includes(dom);
 };
+
+/* ========= Recordatorio menú ========= */
+// v4.1: texto estándar que se agrega al pie de preguntas de datos
+const HINT_MENU = "\n\n_💡 Escribí *menu* para volver al inicio_";
 
 /* ========= Mapeo de Regiones para Flete Nacional ========= */
 const REGIONES_DESTINO = {
@@ -225,12 +216,10 @@ function detectarRegion(ciudad) {
   const c = norm(ciudad);
   for (const [region, ciudades] of Object.entries(REGIONES_DESTINO)) {
     for (const keyword of ciudades) {
-      if (c.includes(keyword) || keyword.includes(c)) {
-        return region;
-      }
+      if (c.includes(keyword) || keyword.includes(c)) return region;
     }
   }
-  return "Centro"; // Default
+  return "Centro";
 }
 
 /* ========= WhatsApp ========= */
@@ -279,14 +268,10 @@ const sendImage = (to, link, caption="") =>
 
 async function sendTypingIndicator(to, durationMs = 3000) {
   const url = `https://graph.facebook.com/${API_VERSION}/${PHONE_NUMBER_ID}/messages`;
-
   try {
     await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
-        "Content-Type": "application/json"
-      },
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         messaging_product: "whatsapp",
         recipient_type: "individual",
@@ -294,37 +279,29 @@ async function sendTypingIndicator(to, durationMs = 3000) {
         typing: "on"
       })
     });
-
     await sleep(Math.min(durationMs, 3000));
-
   } catch (e) {
     console.error("typing indicator error", e?.message || e);
   }
 }
 
 /* ---- Menús / rating / upsell ---- */
+
+// v4.1: WELCOME_TEXT acortado
 const WELCOME_TEXT =
   "🚚 *Conektar - Logística Integral*\n\n" +
-  "Cotizá y calculá tus envíos:\n\n" +
-  "🚛 *Flete AMBA*\n" +
-  "   📍 CABA y Gran Buenos Aires\n" +
-  "   ✓ Carga/descarga incluidas\n\n" +
-  "🚚 *Flete Nacional*\n" +
-  "   📦 Interior del país\n" +
-  "   ✓ Hasta 10 m³ / 10 TN\n\n" +
-  "🌍 *Flete Internacional*\n" +
-  "   ✈️ Aéreo • 🚢 Marítimo • 🚛 Terrestre\n\n" +
-  "🧮 *Calculadora de Importación*\n" +
-  "   💰 FOB → Costo final\n\n" +
-  "⚠️ *Cotizaciones orientativas*\n" +
+  "¡Hola! Podés cotizar tus envíos desde acá.\n\n" +
+  "💡 En cualquier momento escribí *menu* para volver al inicio.\n" +
   "📧 hola@conektarsa.com";
 
+// v4.1: sendMainActions ahora usa lista para mostrar los 4 servicios
 const sendMainActions = async (to) => {
-  return sendButtons(to, "¿Qué servicio necesitás?", [
-    { id:"action_amba",          title:"🚛 Flete AMBA" },
-    { id:"action_nacional",      title:"🚚 Flete Nacional" },
-    { id:"action_internacional", title:"🌍 Coti. Flet Intl" },
-  ]);
+  return sendList(to, "¿Qué servicio necesitás?", [
+    { id:"action_amba",          title:"🚛 Flete AMBA",             description:"CABA y Gran Buenos Aires" },
+    { id:"action_nacional",      title:"🚚 Flete Nacional",          description:"Interior del país" },
+    { id:"action_internacional", title:"🌍 Flete Internacional",     description:"Aéreo • Marítimo • Terrestre" },
+    { id:"action_calculadora",   title:"🧮 Calculadora Importación", description:"FOB → Costo final con impuestos" },
+  ], "Servicios", "Ver servicios");
 };
 
 const sendMasServicios = async (to) => {
@@ -378,9 +355,9 @@ const upsellDespacho = (to) =>
     { id:"desp_no", title:"No, gracias" }
   ]);
 
+// v4.1: endFlow agrega recordatorio antes del rating
 const endFlow = async (to) => {
-  // Primero pedimos rating, después el menú de volver se muestra automáticamente
-  // cuando el usuario califica (ver handler de rate_[1-5] en líneas 1995-2002)
+  await sendText(to, "💡 _Escribí *menu* en cualquier momento para hacer otra consulta._");
   await sendReview(to);
 };
 
@@ -456,11 +433,9 @@ async function logRating(waId, empresa, valor){
     console.log(`⭐ Rating guardado: ${waId} → ${empresa} → ${valor} estrellas`);
   }catch(e){
     console.error("❌ ERROR logRating:", e?.message||e);
-    console.error("   Detalles:", {LOG_SHEET_ID, LOG_TAB, waId, empresa, valor});
   }
 }
 
-// Registrar productos que no se pudieron clasificar
 async function logProductoNoClasificado(waId, empresa, productoDesc, palabrasClave, metodo = "descripcion"){
   try{
     await sheetsClient().spreadsheets.values.append({
@@ -565,8 +540,6 @@ async function loadTransportCatalogs() {
   }
 
   try {
-    console.log("DEBUG cotizarMaritimo - TAB_MARITIMOS:", TAB_MARITIMOS);
-console.log("DEBUG cotizarMaritimo - Tipo de TAB_MARITIMOS:", typeof TAB_MARITIMOS);
     const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:Z10000", ["maritimos", "marítimos", "martimos", "mar"]);
     if (rows.length) {
       const header = rows[0];
@@ -593,7 +566,6 @@ console.log("DEBUG cotizarMaritimo - Tipo de TAB_MARITIMOS:", typeof TAB_MARITIM
   console.log(`📚 Catálogos cargados: ✈️ ${AIRPORT_CATALOG.length} aeropuertos, 🚢 ${SEAPORT_CATALOG.length} puertos.`);
 }
 
-// Guardar empresa del usuario
 async function saveUserEmpresa(telefono, empresa) {
   try {
     const timestamp = new Date().toISOString().split("T")[0];
@@ -609,7 +581,6 @@ async function saveUserEmpresa(telefono, empresa) {
   }
 }
 
-// Recuperar empresa del usuario
 async function getUserEmpresa(telefono) {
   try {
     const rows = await sheetsClient().spreadsheets.values.get({
@@ -634,10 +605,7 @@ async function resolveFuzzySelection(from, s, action, value) {
     await askResumen(from, s);
   } else if (action === "aer_origen") {
     s.origen_aeropuerto = chosen;
-
-    // Verificar ruta ANTES de continuar
     const rutaExiste = await verificarRutaAerea(chosen);
-
     if (!rutaExiste) {
       await sendButtons(from,
         `❌ No encontré rutas disponibles desde *${chosen}*.\n¿Qué querés hacer?`,
@@ -649,9 +617,8 @@ async function resolveFuzzySelection(from, s, action, value) {
       s.step = "waiting_retry";
       return;
     }
-
     s.step = "aer_peso";
-    await sendText(from, "⚖️ *Peso (kg)* (entero).");
+    await sendText(from, `⚖️ *Peso (kg)* (entero).${HINT_MENU}`);
   } else if (action === "c_mar_origen") {
     s.origen_puerto = chosen;
     s.step = "c_confirm";
@@ -678,10 +645,10 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
   const fuse = isAir ? fuseAirports : fuseSeaports;
   const label = isAir ? "aeropuerto" : "puerto";
 
-  // Sin catálogo → error crítico
   if (!catalog.length || !fuse) {
+    // v4.1: error con botón volver al menú
     await sendButtons(from,
-      `⚠️ No tengo catálogo actualizado de ${label}s.\nContactá al equipo.`,
+      `⚠️ No tengo catálogo actualizado de ${label}s.\nContactá al equipo o volvé al menú.`,
       [{ id: "menu_si", title: "🏠 Menú principal" }]
     );
     s.step = "main";
@@ -690,7 +657,6 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
 
   const results = fuse.search(input, { limit: FUSE_MAX_RESULTS });
 
-  // ❌ SIN RESULTADOS
   if (!results.length || results[0].score > 0.6) {
     await sendButtons(from,
       `❌ No encontré "${input}" en ${label}s.\n¿Reintentar con otro nombre?`,
@@ -708,7 +674,6 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
   const best = results[0];
   const inputNorm = norm(input);
 
-  // ✅ MATCH PERFECTO
   if (best && best.item) {
     const bestNorm = best.item.norm || norm(best.item.label);
     if (best.score <= FUSE_AUTO_CONFIRM || bestNorm === inputNorm) {
@@ -720,7 +685,6 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
 
   const closeMatches = results.filter(r => r.score <= FUSE_REJECT_LIMIT);
 
-  // ⚠️ MATCH DUDOSO
   if (!closeMatches.length) {
     await sendButtons(from,
       `⚠️ No encontré coincidencias claras para "${input}".\n¿Reintentar?`,
@@ -735,7 +699,6 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
     return true;
   }
 
-  // UNA SUGERENCIA
   const first = closeMatches[0];
   if (closeMatches.length === 1 && first.score <= FUSE_SUGGEST_LIMIT) {
     s._fuzzy = {
@@ -751,7 +714,6 @@ async function fuzzySearchPlace({ from, s, query, kind, action }) {
     return true;
   }
 
-  // MÚLTIPLES OPCIONES
   const options = closeMatches.slice(0, FUSE_MAX_RESULTS).map((r, idx) => ({
     label: r.item.label, score: r.score, index: idx
   }));
@@ -810,36 +772,26 @@ async function verificarRutaAerea(origen) {
   try {
     const rows = await readTabRange(TAR_SHEET_ID, TAB_AEREOS, "A1:Z10000", ["aereos","aéreos","aereo"]);
     if (!rows.length) return false;
-
     const header = rows[0], data = rows.slice(1);
     const iOrigen = headerIndex(header,"origen");
     const iDest   = headerIndex(header,"destino");
-
     const want = norm(origen);
     const tokens = [want];
     const alias = AIR_MATCHERS.find(a => a.parts.some(p => want.includes(p) || p.includes(want)));
     if (alias) tokens.push(...alias.parts);
-
     const row = data.find(r => {
       const cell = norm(r[iOrigen]||"");
       const dest = norm(r[iDest]||"");
       return dest.includes("eze") && tokens.some(t => t && cell.includes(t));
     });
-
     return !!row;
   } catch {
-    return true; // fail-safe: permitir continuar si hay error
+    return true;
   }
 }
+
 async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_MARITIMOS, "A1:Z10000", ["maritimos","marítimos","martimos","mar"]);
-  console.log("DEBUG Marítimos - TAB_MARITIMOS:");
-  console.log("DEBUG Marítimos - Filas leídas:", rows ? rows.length : "null");
-  console.log("DEBUG Marítimos - Primera fila (headers):", rows ? rows[0] : "sin datos");
-  if (!rows) {
-    console.error("DEBUG Marítimos - La pestaña está vacía o no existe");
-    return null;
-  }
   if (!rows.length) throw new Error("Maritimos vacío");
   const header = rows[0], data = rows.slice(1);
   const iOrigen = headerIndex(header,"origen");
@@ -859,33 +811,17 @@ async function cotizarMaritimo({ origen, modalidad, wm=null, m3=null }) {
   });
   if (!row) return null;
 
-  // Determinar si aplica tarifa voluminosa
   const esVoluminoso = (m3 && m3 >= 5 && m3 <= 10);
   const iPrecio = (esVoluminoso && iPrecioVoluminoso !== -1) ? iPrecioVoluminoso : iPrecioNormal;
-
-  // DEBUG temporal
-  console.log(`[DEBUG LCL] m3=${m3}, esVoluminoso=${esVoluminoso}, iPrecioVoluminoso=${iPrecioVoluminoso}, iPrecioNormal=${iPrecioNormal}, usando columna=${iPrecio}`);
-  if (row && iPrecio !== -1) {
-    console.log(`[DEBUG LCL] Valor en columna ${iPrecio}:`, row[iPrecio]);
-  }
 
   const base = toNum(row[iPrecio]);
   const total = (wm && /lcl/i.test(modalidad)) ? (base * wm) : base;
 
-  // Leer tiempo de tránsito
   const diasTransito = (iTiempoTransito !== -1 && row[iTiempoTransito])
     ? toNum(row[iTiempoTransito])
     : null;
 
-  return {
-    modalidad,
-    totalUSD: total,
-    destino: "Puerto de Buenos Aires",
-    tarifaBase: base,
-    wm,
-    diasTransito,
-    esVoluminoso
-  };
+  return { modalidad, totalUSD: total, destino: "Puerto de Buenos Aires", tarifaBase: base, wm, diasTransito, esVoluminoso };
 }
 
 async function cotizarTerrestre({ origen }) {
@@ -906,12 +842,9 @@ async function cotizarTerrestre({ origen }) {
 }
 
 async function cotizarCourier({ pais, kg }) {
-  console.log(`📋 cotizarCourier - Leyendo pestaña: TAB_COURIER="${TAB_COURIER}"`);
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
-  console.log(`   Filas leídas: ${rows.length}`);
   if (!rows.length) throw new Error("Courier vacío");
   const header = rows[0], data = rows.slice(1);
-  console.log(`   Header: ${JSON.stringify(header.slice(0, 5))}`);
   const iPeso = headerIndex(header,"peso","peso (kg)");
   const iAS   = headerIndex(header,"america sur");
   const iUS   = headerIndex(header,"usa","usa & canada","usa & canadá");
@@ -935,91 +868,30 @@ async function cotizarCourier({ pais, kg }) {
 async function analizarConveniencia(s) {
   const sugerencias = [];
 
-  // ===== MARÍTIMO LCL =====
   if (s.maritimo_tipo === "LCL") {
     const toneladas = Number(s.lcl_tn) || 0;
     const m3 = Number(s.lcl_m3) || 0;
     const wm = Math.max(toneladas, m3);
-
-    // 1. LCL > 15t → Alerta restricciones de manipulación
-    if (toneladas > 15) {
-      sugerencias.push(
-        `⚠️ ${toneladas.toFixed(1)} t supera el límite usual de LCL (15t). Te conviene FCL para evitar restricciones de manipulación.`
-      );
-    }
-
-    // 2. LCL por m³ alto → FCL 40' directo
-    if (m3 >= 28 || wm >= 22) {
-      sugerencias.push(
-        `💡 Con ${m3.toFixed(1)} m³ / ${wm.toFixed(1)} W/M, conviene FCL 40' (cap. ~67 m³). Mejor costo por unidad y menor manipulación.`
-      );
-    }
-    // 3. LCL por m³ medio → FCL 20' directo
-    else if (m3 >= 12 && m3 < 28) {
-      sugerencias.push(
-        `💡 Con ${m3.toFixed(1)} m³, pasamos directo a FCL 20' (cap. ~33 m³). Suele ser más competitivo que LCL en este rango.`
-      );
-    }
-    // 4. LCL > 20 W/M → Sugerencia FCL 40'
-    else if (wm > 20) {
-      sugerencias.push(
-        `💡 Con ${wm.toFixed(1)} W/M, te conviene un 40' completo (hasta ~67 m³). Más económico y espacio exclusivo.`
-      );
-    }
-    // 5. LCL > 10 W/M → Sugerencia FCL 20'
-    else if (wm > 10 && wm <= 20) {
-      sugerencias.push(
-        `💡 Tu carga ocupa ${wm.toFixed(1)} W/M. Un 20' completo puede costar similar y te da hasta ~33 m³ exclusivos.`
-      );
-    }
-
-    // 6. Multi-contenedor por peso total muy alto
+    if (toneladas > 15) sugerencias.push(`⚠️ ${toneladas.toFixed(1)} t supera el límite usual de LCL (15t). Te conviene FCL para evitar restricciones de manipulación.`);
+    if (m3 >= 28 || wm >= 22) sugerencias.push(`💡 Con ${m3.toFixed(1)} m³ / ${wm.toFixed(1)} W/M, conviene FCL 40' (cap. ~67 m³). Mejor costo por unidad y menor manipulación.`);
+    else if (m3 >= 12 && m3 < 28) sugerencias.push(`💡 Con ${m3.toFixed(1)} m³, pasamos directo a FCL 20' (cap. ~33 m³). Suele ser más competitivo que LCL en este rango.`);
+    else if (wm > 20) sugerencias.push(`💡 Con ${wm.toFixed(1)} W/M, te conviene un 40' completo (hasta ~67 m³). Más económico y espacio exclusivo.`);
+    else if (wm > 10 && wm <= 20) sugerencias.push(`💡 Tu carga ocupa ${wm.toFixed(1)} W/M. Un 20' completo puede costar similar y te da hasta ~33 m³ exclusivos.`);
     if (toneladas >= 30) {
       const numContenedores = Math.ceil((toneladas * 1000) / 26000);
-      sugerencias.push(
-        `💡 ${toneladas.toFixed(1)} t requiere ≈${numContenedores} contenedores 40' por límites de peso. Cotizamos FCL múltiple para optimizar tarifa.`
-      );
+      sugerencias.push(`💡 ${toneladas.toFixed(1)} t requiere ≈${numContenedores} contenedores 40' por límites de peso. Cotizamos FCL múltiple para optimizar tarifa.`);
     }
   }
 
-  // ===== AÉREO - CARGA GENERAL =====
   if (s.modo === "aereo" && s.aereo_tipo === "carga_general") {
     const kg = Number(s.peso_kg) || 0;
     const volCbm = Number(s.vol_cbm) || 0;
-
-    // 7. Aéreo > 2000 kg → Marítimo (60-70%)
-    if (kg > 2000) {
-      sugerencias.push(
-        `💡 ${kg} kg por aéreo es muy costoso. Marítimo puede ahorrarte 60-70% (con +30-35 días de tránsito).`
-      );
-    }
-    // 8. Aéreo 1000-2000 kg → Marítimo significativo
-    else if (kg > 1000) {
-      sugerencias.push(
-        `💡 Con ${kg} kg, marítimo puede ser significativamente más económico. Si no es urgente, puede valerte la pena.`
-      );
-    }
-    // 9. Aéreo 500-1000 kg → Marítimo (40-50%)
-    else if (kg > 500) {
-      sugerencias.push(
-        `💡 ${kg} kg está en el límite. Si tu envío no es urgente, marítimo puede ahorrarte 40-50% del costo.`
-      );
-    }
-
-    // 10. Aéreo muy caro salvo urgencia (volumen/peso)
-    if (volCbm >= 3 || kg >= 800) {
-      sugerencias.push(
-        `💡 ${volCbm.toFixed(1)} m³ / ${kg} kg por aéreo suele ser muy caro salvo urgencia. Evaluá marítimo (o dividir envíos).`
-      );
-    }
-
-    // 11. Aéreo: peso volumétrico/real > 2.5× → Alerta voluminoso
+    if (kg > 2000) sugerencias.push(`💡 ${kg} kg por aéreo es muy costoso. Marítimo puede ahorrarte 60-70% (con +30-35 días de tránsito).`);
+    else if (kg > 1000) sugerencias.push(`💡 Con ${kg} kg, marítimo puede ser significativamente más económico. Si no es urgente, puede valerte la pena.`);
+    else if (kg > 500) sugerencias.push(`💡 ${kg} kg está en el límite. Si tu envío no es urgente, marítimo puede ahorrarte 40-50% del costo.`);
+    if (volCbm >= 3 || kg >= 800) sugerencias.push(`💡 ${volCbm.toFixed(1)} m³ / ${kg} kg por aéreo suele ser muy caro salvo urgencia. Evaluá marítimo (o dividir envíos).`);
     const pesoVol = volCbm * 167;
-    if (kg > 0 && pesoVol / kg > 2.5) {
-      sugerencias.push(
-        `⚠️ Aéreo cobra ${pesoVol.toFixed(0)} kg vol. vs ${kg} kg reales. Marítimo puede ser mucho más económico.`
-      );
-    }
+    if (kg > 0 && pesoVol / kg > 2.5) sugerencias.push(`⚠️ Aéreo cobra ${pesoVol.toFixed(0)} kg vol. vs ${kg} kg reales. Marítimo puede ser mucho más económico.`);
   }
 
   return sugerencias.slice(0, 2);
@@ -1027,37 +899,17 @@ async function analizarConveniencia(s) {
 
 /* ========= Cálculo de distancia con IA ========= */
 async function calcularDistanciaAproximada(origen, destino) {
-  if (!anthropic) {
-    console.warn("⚠️ Anthropic no configurado. No se puede calcular distancia.");
-    return null;
-  }
-
-  const prompt = `Calculá la distancia aproximada en kilómetros entre estas dos ubicaciones en Argentina:
-- Origen: ${origen}
-- Destino: ${destino}
-
-Respondé SOLO con el número de kilómetros (sin texto adicional, sin "km").
-Ejemplo: 650`;
-
+  if (!anthropic) return null;
+  const prompt = `Calculá la distancia aproximada en kilómetros entre estas dos ubicaciones en Argentina:\n- Origen: ${origen}\n- Destino: ${destino}\n\nRespondé SOLO con el número de kilómetros (sin texto adicional, sin "km").\nEjemplo: 650`;
   try {
     const response = await anthropic.messages.create({
       model: "claude-3-5-sonnet-20241022",
       max_tokens: 50,
-      messages: [{
-        role: "user",
-        content: prompt
-      }]
+      messages: [{ role: "user", content: prompt }]
     });
-
     const texto = response.content[0].text.trim();
     const km = parseInt(texto.replace(/[^\d]/g, ''));
-
-    if (isNaN(km) || km <= 0) {
-      console.error("❌ No se pudo parsear distancia:", texto);
-      return null;
-    }
-
-    console.log(`✅ Distancia ${origen} → ${destino}: ${km} km`);
+    if (isNaN(km) || km <= 0) return null;
     return km;
   } catch(e) {
     console.error("❌ Error calculando distancia:", e?.message || e);
@@ -1069,17 +921,16 @@ Ejemplo: 650`;
 async function procesarCotizacionNacional(from, s) {
   try {
     await sendTypingIndicator(from, 2500);
-
-    // Calcular distancia con IA
     const distanciaKm = await calcularDistanciaAproximada(s.origen_direccion, s.nacional_destino);
-    if (distanciaKm) {
-      s.distancia_km = distanciaKm;
-    }
+    if (distanciaKm) s.distancia_km = distanciaKm;
 
-    // Buscar tarifa en sheet
     const rows = await readTabRange(TAR_SHEET_ID, TAB_NACIONAL, "A1:Z10000", ["nacional","ltl"]);
     if (!rows || rows.length < 2) {
-      await sendText(from,"❌ No pude cargar las tarifas. Probá de nuevo más tarde.");
+      // v4.1: error con botón volver
+      await sendButtons(from,
+        "❌ No pude cargar las tarifas. Probá de nuevo más tarde.",
+        [{ id:"menu_si", title:"🏠 Volver al menú" }]
+      );
       return;
     }
 
@@ -1090,10 +941,12 @@ async function procesarCotizacionNacional(from, s) {
     const iValorM3 = headerIndex(header, "valor m3", "valor m³");
     const iMinimo = headerIndex(header, "minimo", "mínimo", "minimo a despachar");
 
-    // Buscar fila del destino
     const row = data.find(r => norm(r[iDest]) === norm(s.nacional_destino));
     if (!row) {
-      await sendText(from,`❌ No encontré tarifa para *${s.nacional_destino}*. Contactá a hola@conektarsa.com`);
+      await sendButtons(from,
+        `❌ No encontré tarifa para *${s.nacional_destino}*.\nContactá a hola@conektarsa.com`,
+        [{ id:"menu_si", title:"🏠 Volver al menú" }]
+      );
       return;
     }
 
@@ -1102,16 +955,17 @@ async function procesarCotizacionNacional(from, s) {
     const minimo = toNum(row[iMinimo]);
 
     if (isNaN(valorTN) || isNaN(valorM3) || isNaN(minimo)) {
-      await sendText(from,"❌ Error en los valores de tarifa. Contactá a hola@conektarsa.com");
+      await sendButtons(from,
+        "❌ Error en los valores de tarifa. Contactá a hola@conektarsa.com",
+        [{ id:"menu_si", title:"🏠 Volver al menú" }]
+      );
       return;
     }
 
-    // Calcular total: max(TN × valorTN, m³ × valorM3, minimo)
     const costoTN = s.nacional_tn * valorTN;
     const costoM3 = s.nacional_m3 * valorM3;
     const total = Math.max(costoTN, costoM3, minimo);
 
-    // Construir mensaje
     const lineas = [
       "🚚 *Cotización Flete Nacional*",
       "",
@@ -1119,54 +973,29 @@ async function procesarCotizacionNacional(from, s) {
       `📍 *Origen:* ${s.origen_direccion}`,
       `📍 *Destino:* ${s.nacional_destino}`,
     ];
-
-    if (s.distancia_km) {
-      lineas.push(`📏 *Distancia:* ${fmt(s.distancia_km)} km`);
-    }
-
-    if (s.fecha_transporte) {
-      lineas.push(`📅 *Fecha de envío:* ${s.fecha_transporte}`);
-    }
-
-    lineas.push("");
-    lineas.push(`💰 *Total:* $ ${fmtARS(total)}`);
-    lineas.push("");
-    lineas.push("_Valor no incluye IVA_");
-    lineas.push("⚠️ *Cotización orientativa*");
-    lineas.push("❌ *No incluye* carga/descarga");
-    lineas.push("");
-    lineas.push(`*Validez:* ${VALIDEZ_DIAS} días`);
+    if (s.distancia_km) lineas.push(`📏 *Distancia:* ${fmt(s.distancia_km)} km`);
+    if (s.fecha_transporte) lineas.push(`📅 *Fecha de envío:* ${s.fecha_transporte}`);
+    lineas.push("", `💰 *Total:* $ ${fmtARS(total)}`, "", "_Valor no incluye IVA_", "⚠️ *Cotización orientativa*", "❌ *No incluye* carga/descarga", "", `*Validez:* ${VALIDEZ_DIAS} días`);
 
     await sendText(from, lineas.join("\n"));
 
-    // Log
     await logSolicitud([
-      new Date().toISOString(),
-      from,
-      "",
-      s.empresa,
-      "whatsapp",
-      "flete_nacional",
-      `${s.nacional_m3}m³/${s.nacional_tn}tn`,
-      s.nacional_destino,
-      s.origen_direccion,
-      "",
-      "",
-      total,
-      `Nacional: ${s.origen_direccion} → ${s.nacional_destino}`
+      new Date().toISOString(), from, "", s.empresa, "whatsapp", "flete_nacional",
+      `${s.nacional_m3}m³/${s.nacional_tn}tn`, s.nacional_destino, s.origen_direccion,
+      "", "", total, `Nacional: ${s.origen_direccion} → ${s.nacional_destino}`
     ]);
 
-    // Cierre: rating + menú
     await endFlow(from);
   } catch(e) {
     console.error("Error en procesarCotizacionNacional:", e);
-    await sendText(from,"❌ Hubo un error procesando tu cotización. Probá de nuevo más tarde.");
+    await sendButtons(from,
+      "❌ Hubo un error procesando tu cotización. Probá de nuevo más tarde.",
+      [{ id:"menu_si", title:"🏠 Volver al menú" }]
+    );
   }
 }
 
 /* ========= Clasificación automática de productos ========= */
-
-// Función para calcular similitud entre strings (Levenshtein simplificado)
 function similarity(a, b) {
   const longer = a.length > b.length ? a : b;
   const shorter = a.length > b.length ? b : a;
@@ -1177,135 +1006,62 @@ function similarity(a, b) {
 
 function levenshteinDistance(a, b) {
   const matrix = [];
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
-  }
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0][j] = j;
-  }
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
   for (let i = 1; i <= b.length; i++) {
     for (let j = 1; j <= a.length; j++) {
       if (b.charAt(i - 1) === a.charAt(j - 1)) {
         matrix[i][j] = matrix[i - 1][j - 1];
       } else {
-        matrix[i][j] = Math.min(
-          matrix[i - 1][j - 1] + 1,
-          matrix[i][j - 1] + 1,
-          matrix[i - 1][j] + 1
-        );
+        matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j] + 1);
       }
     }
   }
   return matrix[b.length][a.length];
 }
 
-// Extrae palabras clave de un texto (elimina stopwords comunes)
 function extraerPalabrasClave(texto) {
   const stopwords = ['el', 'la', 'de', 'en', 'un', 'una', 'para', 'con', 'por', 'del', 'los', 'las', 'y', 'o', 'que'];
-  const palabras = norm(texto)
-    .split(/[\s,;.]+/)
-    .filter(p => p.length > 2 && !stopwords.includes(p));
+  const palabras = norm(texto).split(/[\s,;.]+/).filter(p => p.length > 2 && !stopwords.includes(p));
   return [...new Set(palabras)];
 }
 
-// Busca producto en la planilla MATRIZ por TAGS
 async function buscarProductoEnTags(palabrasClave) {
   try {
     const M = await getMatrix();
-    if (!M || M.length === 0) {
-      console.log("DEBUG buscarProductoEnTags: Matriz vacía");
-      return [];
-    }
-
+    if (!M || M.length === 0) return [];
     const resultados = [];
-
     for (const fila of M) {
       const tagsRaw = fila.TAGS || "";
-      // PRIMERO split por comas, DESPUÉS normalizar cada tag
       const tags = tagsRaw.split(/[,;]+/).map(t => norm(t.trim())).filter(Boolean);
       if (tags.length === 0) continue;
-
       let score = 0;
       let matches = [];
-
       for (const palabra of palabrasClave) {
         const pNorm = norm(palabra);
-
-        // Match exacto
-        if (tags.includes(pNorm)) {
-          score += PUNTOS_MATCH.MATCH_EXACTO;
-          matches.push(palabra);
-          continue;
-        }
-
-        // Match parcial (substring)
-        if (tags.some(t => t.includes(pNorm) || pNorm.includes(t))) {
-          score += PUNTOS_MATCH.MATCH_PARCIAL;
-          matches.push(palabra);
-          continue;
-        }
-
-        // Match de raíz común (primeros 4-5 caracteres)
-        // Ej: "decorativo" vs "decoracion" → "decor" común
+        if (tags.includes(pNorm)) { score += PUNTOS_MATCH.MATCH_EXACTO; matches.push(palabra); continue; }
+        if (tags.some(t => t.includes(pNorm) || pNorm.includes(t))) { score += PUNTOS_MATCH.MATCH_PARCIAL; matches.push(palabra); continue; }
         if (pNorm.length >= 5) {
           const raizPalabra = pNorm.substring(0, 5);
           const matchRaiz = tags.some(t => t.length >= 5 && t.substring(0, 5) === raizPalabra);
-          if (matchRaiz) {
-            score += PUNTOS_MATCH.MATCH_PARCIAL;
-            matches.push(palabra);
-            continue;
-          }
+          if (matchRaiz) { score += PUNTOS_MATCH.MATCH_PARCIAL; matches.push(palabra); continue; }
         }
-
-        // Match fuzzy
         for (const tag of tags) {
           const sim = similarity(pNorm, tag);
-          if (sim >= 0.85) {
-            score += PUNTOS_MATCH.MATCH_FUZZY_85;
-            matches.push(palabra);
-            break;
-          } else if (sim >= 0.70) {
-            score += PUNTOS_MATCH.MATCH_FUZZY_70;
-            break;
-          }
+          if (sim >= 0.85) { score += PUNTOS_MATCH.MATCH_FUZZY_85; matches.push(palabra); break; }
+          else if (sim >= 0.70) { score += PUNTOS_MATCH.MATCH_FUZZY_70; break; }
         }
       }
-
       if (score > 0) {
         resultados.push({
-          fila,
-          score,
+          fila, score,
           matches: [...new Set(matches)],
           categoria: fila.SUB || fila.NIV3 || fila.NIV2 || "",
           clasificacion: [fila.NIV1, fila.NIV2, fila.NIV3].filter(Boolean).join(" → ")
         });
       }
     }
-
-    // Ordenar por score descendente
     resultados.sort((a, b) => b.score - a.score);
-
-    const topScore = resultados[0]?.score || 0;
-    console.log(`\n🔍 DEBUG buscarProductoEnTags:`);
-    console.log(`   📊 Resultados totales: ${resultados.length}`);
-    console.log(`   🎯 Top score: ${topScore} (umbral: ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
-
-    if (resultados.length > 0) {
-      console.log(`   🏆 Top 3 matches:`);
-      resultados.slice(0, 3).forEach((r, i) => {
-        console.log(`      ${i+1}. ${r.categoria} (score: ${r.score})`);
-        console.log(`         Tags: ${r.fila.TAGS?.substring(0, 60)}...`);
-        console.log(`         Matches: [${r.matches.join(", ")}]`);
-      });
-    }
-
-    // Si el score es bajo, sugerir tags faltantes
-    if (topScore < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES && palabrasClave.length > 0) {
-      console.log(`\n   ⚠️ Score insuficiente (${topScore} < ${UMBRAL_CONFIANZA.MOSTRAR_OPCIONES})`);
-      console.log(`   🔎 Palabras buscadas: [${palabrasClave.join(", ")}]`);
-      console.log(`   💡 Sugerencia: Agregar estas palabras como tags en la matriz\n`);
-    }
-
     return resultados;
   } catch (err) {
     console.error("ERROR buscarProductoEnTags:", err);
@@ -1313,262 +1069,83 @@ async function buscarProductoEnTags(palabrasClave) {
   }
 }
 
-// Extrae info de producto desde una URL
 async function extraerInfoDesdeURL(url) {
   try {
-    // Validar formato de URL
     let urlObj;
-    try {
-      urlObj = new URL(url);
-    } catch {
-      return { error: "URL_INVALIDA", mensaje: "El link no es válido. Asegurate de copiar el link completo." };
-    }
-
-    // Validar dominio permitido
+    try { urlObj = new URL(url); } catch { return { error: "URL_INVALIDA", mensaje: "El link no es válido. Asegurate de copiar el link completo." }; }
     const dominio = urlObj.hostname.toLowerCase().replace(/^www\./, '');
     const permitido = DOMINIOS_PERMITIDOS.some(d => dominio === d || dominio.endsWith('.' + d));
+    if (!permitido) return { error: "DOMINIO_NO_PERMITIDO", mensaje: `⚠️ No reconozco ese sitio web.\n\nPor seguridad, solo analizo links de:\n• MercadoLibre\n• AliExpress\n• Amazon\n• Alibaba\n• eBay\n• Páginas del fabricante verificadas` };
 
-    if (!permitido) {
-      return {
-        error: "DOMINIO_NO_PERMITIDO",
-        mensaje: `⚠️ No reconozco ese sitio web.\n\nPor seguridad, solo analizo links de:\n• MercadoLibre\n• AliExpress\n• Amazon\n• Alibaba\n• eBay\n• Páginas del fabricante verificadas`
-      };
-    }
-
-    // Timeout de 10 segundos
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; ConektarBot/1.0)'
-      }
-    });
-
+    const response = await fetch(url, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ConektarBot/1.0)' } });
     clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      return {
-        error: "NO_ACCESIBLE",
-        mensaje: "❌ No pude acceder a ese link.\n\nPuede que:\n• El producto ya no exista\n• El link esté incompleto\n• El sitio no responda"
-      };
-    }
+    if (!response.ok) return { error: "NO_ACCESIBLE", mensaje: "❌ No pude acceder a ese link.\n\nPuede que:\n• El producto ya no exista\n• El link esté incompleto\n• El sitio no responda" };
 
     const html = await response.text();
-
-    // Extraer título y descripción básicos con regex como fallback
     let titulo = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || "";
     let descripcion = html.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']+)["']/i)?.[1] || "";
-
     let palabrasClave = [];
 
-    // Si tenemos Claude configurado, usarlo para análisis inteligente
     if (anthropic) {
       try {
-        // Limpiar HTML (tomar solo primeros 5000 chars para no saturar)
-        const htmlLimpio = html.substring(0, 5000)
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-
-        const prompt = `Analiza este HTML de una página de producto de e-commerce y extrae:
-
-1. El nombre del producto (título principal)
-2. Palabras clave relevantes para clasificar el producto (máximo 5-8 palabras)
-
-HTML:
-${htmlLimpio}
-
-Responde SOLO con un JSON en este formato:
-{
-  "titulo": "nombre del producto",
-  "palabras_clave": ["palabra1", "palabra2", "palabra3"]
-}`;
-
-        const message = await anthropic.messages.create({
-          model: "claude-3-5-haiku-20241022",
-          max_tokens: 500,
-          messages: [{
-            role: "user",
-            content: prompt
-          }]
-        });
-
+        const htmlLimpio = html.substring(0, 5000).replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '').replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+        const prompt = `Analiza este HTML de una página de producto de e-commerce y extrae:\n1. El nombre del producto\n2. Palabras clave (máximo 5-8)\n\nHTML:\n${htmlLimpio}\n\nResponde SOLO con JSON:\n{\n  "titulo": "nombre del producto",\n  "palabras_clave": ["palabra1", "palabra2"]\n}`;
+        const message = await anthropic.messages.create({ model: "claude-3-5-haiku-20241022", max_tokens: 500, messages: [{ role: "user", content: prompt }] });
         const respuestaTexto = message.content[0].text;
         const jsonMatch = respuestaTexto.match(/\{[\s\S]*\}/);
-
         if (jsonMatch) {
           const resultado = JSON.parse(jsonMatch[0]);
           if (resultado.titulo) titulo = resultado.titulo;
-          if (resultado.palabras_clave && Array.isArray(resultado.palabras_clave)) {
-            palabrasClave = resultado.palabras_clave.map(p => norm(p)).filter(Boolean);
-          }
+          if (resultado.palabras_clave && Array.isArray(resultado.palabras_clave)) palabrasClave = resultado.palabras_clave.map(p => norm(p)).filter(Boolean);
         }
-      } catch (claudeErr) {
-        console.error("ERROR Claude API:", claudeErr);
-        // Si falla Claude, usar fallback con regex
-      }
+      } catch (claudeErr) { console.error("ERROR Claude API:", claudeErr); }
     }
 
-    // Fallback: si Claude no extrajo palabras o no está configurado, usar método básico
-    if (palabrasClave.length === 0) {
-      const textoCompleto = titulo + " " + descripcion;
-      palabrasClave = extraerPalabrasClave(textoCompleto);
-    }
-
-    if (palabrasClave.length === 0) {
-      return {
-        error: "SIN_INFO_UTIL",
-        mensaje: "🔍 Abrí el link pero no encontré info del producto.\n\nEsto pasa cuando:\n• La página requiere login\n• El producto está sin stock\n• No hay descripción disponible"
-      };
-    }
-
-    return {
-      ok: true,
-      titulo: titulo.substring(0, 100),
-      palabrasClave,
-      url
-    };
-
+    if (palabrasClave.length === 0) palabrasClave = extraerPalabrasClave(titulo + " " + descripcion);
+    if (palabrasClave.length === 0) return { error: "SIN_INFO_UTIL", mensaje: "🔍 Abrí el link pero no encontré info del producto." };
+    return { ok: true, titulo: titulo.substring(0, 100), palabrasClave, url };
   } catch (err) {
-    if (err.name === 'AbortError') {
-      return {
-        error: "TIMEOUT",
-        mensaje: "⏱️ El sitio tardó demasiado en responder. Intentá de nuevo o probá con otro método."
-      };
-    }
-
+    if (err.name === 'AbortError') return { error: "TIMEOUT", mensaje: "⏱️ El sitio tardó demasiado en responder. Intentá de nuevo o probá con otro método." };
     console.error("ERROR extraerInfoDesdeURL:", err);
-    return {
-      error: "ERROR_GENERICO",
-      mensaje: "❌ Hubo un error al analizar el link. Probá con otro método."
-    };
+    return { error: "ERROR_GENERICO", mensaje: "❌ Hubo un error al analizar el link. Probá con otro método." };
   }
 }
 
-// Analiza una imagen de producto con Claude Vision
 async function analizarImagenProducto(imagenUrl) {
-  if (!anthropic) {
-    return {
-      ok: false,
-      error: "NO_CONFIGURADO",
-      mensaje: "📸 El análisis de imágenes requiere configurar ANTHROPIC_API_KEY en el archivo .env"
-    };
-  }
-
+  if (!anthropic) return { ok: false, error: "NO_CONFIGURADO", mensaje: "📸 El análisis de imágenes requiere configurar ANTHROPIC_API_KEY." };
   try {
-    // Descargar la imagen
-    const response = await fetch(imagenUrl, {
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
-      }
-    });
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: "NO_ACCESIBLE",
-        mensaje: "❌ No pude acceder a la imagen. Intentá enviarla de nuevo."
-      };
-    }
-
-    // Convertir a base64
+    const response = await fetch(imagenUrl, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } });
+    if (!response.ok) return { ok: false, error: "NO_ACCESIBLE", mensaje: "❌ No pude acceder a la imagen. Intentá enviarla de nuevo." };
     const buffer = await response.arrayBuffer();
     const base64 = Buffer.from(buffer).toString('base64');
-
-    // Determinar tipo de imagen
     const contentType = response.headers.get('content-type') || 'image/jpeg';
-    const mediaType = contentType.includes('png') ? 'image/png' :
-                      contentType.includes('gif') ? 'image/gif' :
-                      contentType.includes('webp') ? 'image/webp' : 'image/jpeg';
+    const mediaType = contentType.includes('png') ? 'image/png' : contentType.includes('gif') ? 'image/gif' : contentType.includes('webp') ? 'image/webp' : 'image/jpeg';
 
-    // Analizar con Claude Vision
     const message = await anthropic.messages.create({
       model: "claude-3-5-haiku-20241022",
       max_tokens: 500,
       messages: [{
         role: "user",
         content: [
-          {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: base64
-            }
-          },
-          {
-            type: "text",
-            text: `Analiza esta imagen de un producto y extrae:
-
-1. El nombre o tipo de producto que se ve en la imagen
-2. Palabras clave relevantes para clasificarlo: incluye el nombre del producto, sinónimos, categoría, material, uso, etc. (5-10 palabras clave variadas)
-3. Si la imagen es apropiada para análisis comercial (no contenido inapropiado)
-4. Si el producto es muy complejo (ej: maquinaria industrial, equipos médicos caros, vehículos)
-
-Ejemplos de palabras clave:
-- Para una billetera: ["billetera", "cartera", "monedero", "cuero", "accesorio", "moda"]
-- Para un mouse: ["mouse", "raton", "computadora", "informatica", "periferico", "inalambrico"]
-- Para un jarrón: ["jarron", "florero", "decoracion", "ornamento", "hogar", "ceramica"]
-
-Responde SOLO con un JSON en este formato:
-{
-  "apropiada": true/false,
-  "producto": "nombre del producto",
-  "palabras_clave": ["palabra1", "palabra2", "palabra3", ...],
-  "complejidad": "baja/media/alta",
-  "requiere_asesor": true/false
-}`
-          }
+          { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+          { type: "text", text: `Analiza esta imagen de un producto y extrae:\n1. Nombre del producto\n2. Palabras clave (5-10)\n3. Si es apropiada para análisis comercial\n4. Si el producto es complejo\n\nResponde SOLO con JSON:\n{\n  "apropiada": true/false,\n  "producto": "nombre",\n  "palabras_clave": ["palabra1"],\n  "complejidad": "baja/media/alta",\n  "requiere_asesor": true/false\n}` }
         ]
       }]
     });
 
     const respuestaTexto = message.content[0].text;
     const jsonMatch = respuestaTexto.match(/\{[\s\S]*\}/);
-
-    if (!jsonMatch) {
-      return {
-        ok: false,
-        error: "ERROR_ANALISIS",
-        mensaje: "❌ No pude analizar la imagen correctamente. Intentá con otra foto más clara."
-      };
-    }
-
+    if (!jsonMatch) return { ok: false, error: "ERROR_ANALISIS", mensaje: "❌ No pude analizar la imagen correctamente. Intentá con otra foto más clara." };
     const resultado = JSON.parse(jsonMatch[0]);
+    if (!resultado.apropiada) return { ok: false, error: "IMAGEN_INAPROPIADA", mensaje: "⚠️ La imagen no muestra un producto claro.\n\nPor favor:\n✓ Enviá una foto del producto\n✓ Con buena iluminación\n✓ Que se vea completo" };
 
-    // Validar que la imagen sea apropiada
-    if (!resultado.apropiada) {
-      return {
-        ok: false,
-        error: "IMAGEN_INAPROPIADA",
-        mensaje: "⚠️ La imagen no es apropiada o no muestra un producto claro.\n\nPor favor:\n✓ Enviá una foto del producto\n✓ Con buena iluminación\n✓ Que se vea el producto completo"
-      };
-    }
-
-    // Normalizar palabras clave
-    const palabrasClave = (resultado.palabras_clave || [])
-      .map(p => norm(p))
-      .filter(Boolean);
-
-    console.log(`📸 Claude Vision extrajo: "${resultado.producto}"`);
-    console.log(`🔍 Palabras clave: [${palabrasClave.join(", ")}]`);
-
-    return {
-      ok: true,
-      producto: resultado.producto || "",
-      palabrasClave,
-      complejidad: resultado.complejidad || "media",
-      requiere_asesor: resultado.requiere_asesor || false
-    };
-
+    const palabrasClave = (resultado.palabras_clave || []).map(p => norm(p)).filter(Boolean);
+    return { ok: true, producto: resultado.producto || "", palabrasClave, complejidad: resultado.complejidad || "media", requiere_asesor: resultado.requiere_asesor || false };
   } catch (err) {
     console.error("ERROR analizarImagenProducto:", err);
-    return {
-      ok: false,
-      error: "ERROR_GENERICO",
-      mensaje: "❌ Hubo un error al analizar la imagen. Probá con otro método o contactá a un asesor."
-    };
+    return { ok: false, error: "ERROR_GENERICO", mensaje: "❌ Hubo un error al analizar la imagen. Probá con otro método o contactá a un asesor." };
   }
 }
 
@@ -1576,49 +1153,36 @@ Responde SOLO con un JSON en este formato:
 const sessions = new Map();
 const emptyState = () => ({
   empresa:null, welcomed:false, askedEmpresa:false, step:"start",
-  // cotizador
   modo:null, maritimo_tipo:null, contenedor:null, origen_puerto:null, destino_puerto:"Buenos Aires (AR)",
   aereo_tipo:null, origen_aeropuerto:null, destino_aeropuerto:"Ezeiza (EZE)",
   courier_pf:null,
   terrestre_tipo:"FTL", origen_direccion:null, destino_direccion:"Buenos Aires (AR)",
   peso_kg:null, vol_cbm:null, exw_dir:null, valor_mercaderia:null, tipo_mercaderia:null,
-  // LCL extras
   lcl_tn:null, lcl_m3:null, lcl_apilable:null,
-  // calculadora
   flow:null, producto_desc:null, categoria:null, matriz:null,
   fob_unit:null, cantidad:null, fob_total:null,
   calc_modo:null, calc_maritimo_tipo:null, calc_contenedor:null,
-  // árbol
   sel_n1:null, sel_n2:null, sel_n3:null,
   _tree:null, _find:null, _matches:null,
   _fuzzy:null, _fuzzyPrevStep:null,
-  // email
   email:null,
-  // flete local
   local_cap:null, local_tipo:null, local_dist:null,
-  // flete nacional
   nacional_destino:null, nacional_m3:null, nacional_tn:null, distancia_km:null,
-  // fecha (para ambos fletes)
   fecha_transporte:null,
 });
 async function getS(id){
   if(!sessions.has(id)) {
     sessions.set(id, { data: { ...emptyState() } });
-    // Cargar empresa guardada - ESPERAR a que termine
     const empresa = await getUserEmpresa(id);
     if (empresa) {
       const s = sessions.get(id);
-      if (s) {
-        s.data.empresa = empresa;
-        s.data.askedEmpresa = true; // Marcar que ya tiene empresa
-        console.log(`👤 Usuario conocido: ${id} → ${empresa}`);
-      }
+      if (s) { s.data.empresa = empresa; s.data.askedEmpresa = true; }
     }
   }
   return sessions.get(id);
 }
 
-/* ========= Matriz (Clasificación dentro del mismo Sheet) ========= */
+/* ========= Matriz ========= */
 async function readMatrix() {
   if (!TAR_SHEET_ID) return [];
   const rows = await readTabRange(TAR_SHEET_ID, TAB_CLASIFICACION, "A1:Z10000", ["clasificacion","clasificación"]);
@@ -1627,26 +1191,18 @@ async function readMatrix() {
   const find = (...lbl) => header.findIndex(h => lbl.map(x=>x.toLowerCase()).some(t => h.toLowerCase()===t || h.toLowerCase().includes(t)));
 
   const idx = {
-    NIV1: find("NIVEL_1","NIVEL 1"),
-    NIV2: find("NIVEL_2","NIVEL 2"),
-    NIV3: find("NIVEL_3","NIVEL 3"),
+    NIV1: find("NIVEL_1","NIVEL 1"), NIV2: find("NIVEL_2","NIVEL 2"), NIV3: find("NIVEL_3","NIVEL 3"),
     SUB : find("SUBCATEGORIA","SUBCATEGORÍA","PRODUCTO","SUBCATEGORIA/PRODUCTO"),
     TAGS: find("TAGS","TAG","ETIQUETAS"),
     TASA: find("Tasa Estadisti","Tasa Estadistica","Tasa Estadística"),
-    IVA : find("% IVA","IVA","IVA %"),
-    IVA_A:find("% IVA ADIC","IVA ADICIONAL","IVA ADIC"),
-    DI  : find("DERECHOS IM","% DERECHOS","DERECHOS"),
-    IIBB: find("% IIBB","IIBB"),
-    IIGG: find("% IIGG","IIGG"),
-    INT : find("IMPUESTOS INTE","IMPUESTOS INT","INTERNOS"),
+    IVA : find("% IVA","IVA","IVA %"), IVA_A:find("% IVA ADIC","IVA ADICIONAL","IVA ADIC"),
+    DI  : find("DERECHOS IM","% DERECHOS","DERECHOS"), IIBB: find("% IIBB","IIBB"),
+    IIGG: find("% IIGG","IIGG"), INT : find("IMPUESTOS INTE","IMPUESTOS INT","INTERNOS"),
     NOTA: find("NOTAS","OBS","NOTAS / IMPUESTOS_IMPO","IMPUESTOS_IMPO")
   };
 
   const data = rows.slice(1).map(r => ({
-    NIV1: r[idx.NIV1] || "",
-    NIV2: r[idx.NIV2] || "",
-    NIV3: r[idx.NIV3] || "",
-    SUB : r[idx.SUB]  || "",
+    NIV1: r[idx.NIV1] || "", NIV2: r[idx.NIV2] || "", NIV3: r[idx.NIV3] || "", SUB : r[idx.SUB]  || "",
     TAGS: (r[idx.TAGS] || "").toString(),
     tasa_est: isFinite(toNum(r[idx.TASA])) ? toNum(r[idx.TASA])/100 : TASA_ESTATISTICA,
     iva     : isFinite(toNum(r[idx.IVA])) ? toNum(r[idx.IVA])/100 : 0.21,
@@ -1658,13 +1214,6 @@ async function readMatrix() {
     nota    : (r[idx.NOTA] || "").toString()
   })).filter(x => (x.NIV1||x.NIV2||x.NIV3||x.SUB));
 
-  console.log(`✅ Matriz cargada: ${data.length} categorías`);
-  console.log(`📋 Columna TAGS encontrada en índice: ${idx.TAGS !== -1 ? idx.TAGS : 'NO ENCONTRADA'}`);
-  if (data.length > 0 && idx.TAGS !== -1) {
-    const conTags = data.filter(x => x.TAGS).length;
-    console.log(`🏷️ Categorías con tags: ${conTags}/${data.length}`);
-  }
-
   return data;
 }
 let MATRIX_CACHE=null;
@@ -1672,10 +1221,8 @@ async function getMatrix(){ if (MATRIX_CACHE) return MATRIX_CACHE; MATRIX_CACHE 
 
 function indexMatrix(M){
   return M.map(r=>({
-    niv1: (r.NIV1||"").toString(),
-    niv2: (r.NIV2||"").toString(),
-    niv3: (r.NIV3||"").toString(),
-    sub : (r.SUB ||"").toString(),
+    niv1: (r.NIV1||"").toString(), niv2: (r.NIV2||"").toString(),
+    niv3: (r.NIV3||"").toString(), sub : (r.SUB ||"").toString(),
     iva:r.iva, iva_ad:r.iva_ad, di:r.di, iibb:r.iibb, iigg:r.iigg, internos:r.internos, nota:r.nota, tasa_est:r.tasa_est
   }));
 }
@@ -1694,10 +1241,7 @@ const askProdMetodo = (to) => sendButtons(to,
     { id:"calc_cat",       title:"🔎 Categorías" }
   ]
 );
-const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({
-  id:`${pref}_${i}`,
-  title: clip24(t)
-}));
+const listFrom = (arr, pref) => arr.slice(0,10).map((t,i)=>({ id:`${pref}_${i}`, title: clip24(t) }));
 
 /* ========= VERIFY ========= */
 app.get("/webhook", (req,res)=>{
@@ -1729,32 +1273,15 @@ app.post("/webhook", async (req,res)=>{
       await sendImage(from, LOGO_URL, "");
       await sendTypingIndicator(from, 1500);
 
-      // Si ya tiene empresa guardada → bienvenida personalizada
       if (s.empresa) {
-        // Obtener hora en Argentina (UTC-3)
-        const horaArgentina = new Date().toLocaleString("en-US", {
-          timeZone: "America/Argentina/Buenos_Aires",
-          hour: "numeric",
-          hour12: false
-        });
+        const horaArgentina = new Date().toLocaleString("en-US", { timeZone: "America/Argentina/Buenos_Aires", hour: "numeric", hour12: false });
         const hora = parseInt(horaArgentina);
-
-        // Horarios adaptados para Argentina: 6-12, 12-20, 20-6
-        let saludo;
-        if (hora >= 6 && hora < 12) {
-          saludo = "Buenos días";
-        } else if (hora >= 12 && hora < 20) {
-          saludo = "Buenas tardes";
-        } else {
-          saludo = "Buenas noches";
-        }
-
-        await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!`);
+        const saludo = hora >= 6 && hora < 12 ? "Buenos días" : hora >= 12 && hora < 20 ? "Buenas tardes" : "Buenas noches";
+        await sendText(from, `${saludo} *${s.empresa}*! 😀\n\n¡Qué bueno leerte de nuevo!\n\n_💡 Escribí *menu* en cualquier momento para volver al inicio._`);
         await sendTypingIndicator(from, 800);
         await sendMainActions(from);
         s.step = "main";
       } else {
-        // Usuario nuevo → bienvenida completa
         await sendText(from, WELCOME_TEXT);
         await sendTypingIndicator(from, 1000);
         await sendText(from, "Para empezar, decime el *nombre de tu empresa*.");
@@ -1763,24 +1290,17 @@ app.post("/webhook", async (req,res)=>{
       }
     };
 
-    // Cualquier primer mensaje → bienvenida
     if (!s.welcomed) { await showWelcomeOnce(); return res.sendStatus(200); }
 
-    // Comandos globales - funcionan desde CUALQUIER estado
+    // Comandos globales
     if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
-      if (lower==="inicio" || lower==="reset") {
-        sessions.delete(from);
-        await getS(from);
-      } else {
-        // Resetear estado para volver al menú
-        s.step = "main";
-        s.flow = null;
-      }
+      if (lower==="inicio" || lower==="reset") { sessions.delete(from); await getS(from); }
+      else { s.step = "main"; s.flow = null; }
       await sendMainActions(from);
       return res.sendStatus(200);
     }
 
-    // Ayuda rápida
+    // v4.1: ayuda ahora muestra el menú después
     if (type==="text" && ["ayuda","help","?"].includes(lower)) {
       await sendText(from,
         `📌 *Comandos útiles:*\n\n` +
@@ -1788,25 +1308,24 @@ app.post("/webhook", async (req,res)=>{
         `• Escribí *inicio* para reiniciar la conversación\n` +
         `• Escribí *ayuda* para ver estos comandos`
       );
+      await sendMainActions(from);
       return res.sendStatus(200);
     }
 
-    /* ===== INTERACTIVE (botones/listas) ===== */
+    /* ===== INTERACTIVE ===== */
     if (type==="interactive") {
 
-      // ===== Menú principal
       if (btnId==="action_amba" || btnId==="action_local"){
         await sendTypingIndicator(from, 800);
         s.flow="local"; s.step="local_cap";
         const caps = ["1 Pallet - 2 m3 -500 Kg","3 Pallet - 9 m3 - 1500 Kg","6 Pallet - 14 m3 - 3200 Kg","12 Pallet - 20 m3 - 10 TN","20' ST","40' ST","40' HC"];
         s._localCaps = caps;
-        await sendList(from, "Elegí *Capacidad*:", listFrom(caps,"cap"), "Capacidad", "Elegir");
+        await sendList(from, "Elegí *Capacidad*:" + HINT_MENU, listFrom(caps,"cap"), "Capacidad", "Elegir");
       }
       else if (btnId==="action_nacional"){
         await sendTypingIndicator(from, 800);
-        s.flow="nacional";
-        s.step="nacional_m3";
-        await sendText(from,"📦 *Flete Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga.\n\nEjemplo: 3.5");
+        s.flow="nacional"; s.step="nacional_m3";
+        await sendText(from,`📦 *Flete Nacional*\n\nIngresá los *metros cúbicos (m³)* de tu carga.\n\nEjemplo: 3.5${HINT_MENU}`);
       }
       else if (btnId==="action_mas"){
         await sendTypingIndicator(from, 800);
@@ -1822,10 +1341,8 @@ app.post("/webhook", async (req,res)=>{
         s.flow="calc"; s.step="calc_prod_m"; await askProdMetodo(from);
       }
 
-      // === Menú principal - DEBE IR ANTES del handler genérico menu_*
       if (btnId==="menu_si"){
-        s.step = "main";
-        s.flow = null;
+        s.step = "main"; s.flow = null;
         await sendMainActions(from);
       }
       else if (btnId==="menu_no"){
@@ -1833,7 +1350,6 @@ app.post("/webhook", async (req,res)=>{
         sessions.delete(from);
       }
 
-      // ===== Cotizador clásico (modos de transporte)
       else if (btnId.startsWith("menu_") && btnId !== "menu_si" && btnId !== "menu_no"){
         await sendTypingIndicator(from, 800);
         s.modo = btnId.replace("menu_","");
@@ -1845,62 +1361,38 @@ app.post("/webhook", async (req,res)=>{
             { id:"aer_courier", title:"Courier" }
           ]);
         }
-        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,"🚛 *Terrestre Full (Camión completo):* Indicá ciudad."); }
+        if (s.modo==="terrestre"){ s.terrestre_tipo="FTL"; s.step="ter_origen"; await sendText(from,`🚛 *Terrestre Full (Camión completo):* Indicá ciudad.${HINT_MENU}`); }
       }
       else if (btnId==="mar_LCL"){
-        s.maritimo_tipo = "LCL";
-        s.lcl_tn = null;
-        s.lcl_m3 = null;
-        s.lcl_apilable = null;
+        s.maritimo_tipo = "LCL"; s.lcl_tn = null; s.lcl_m3 = null; s.lcl_apilable = null;
         s.step="lcl_tn";
-        await sendText(from,"⚖️ Ingresá las *TONELADAS* totales (ej.: 2.5)");
+        await sendText(from,`⚖️ Ingresá las *TONELADAS* totales (ej.: 2.5)${HINT_MENU}`);
       }
-      else if (btnId==="mar_FCL"){ 
+      else if (btnId==="mar_FCL"){
         s.maritimo_tipo = "FCL"; s.step="mar_equipo"; await sendContenedores(from);
       }
-  else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
-  const cont = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
-  
-  if (s.flow === "calc") {
-  // Calculadora
-  s.calc_maritimo_tipo = "FCL";
-  s.calc_contenedor = cont;
-  s.step = "c_mar_origen";  // ✅ Nuevo paso
-  await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
-  } else {
-      // Cotizador clásico
-      s.maritimo_tipo = "FCL";
-      s.contenedor = cont;
-      s.lcl_tn = null;
-      s.lcl_m3 = null;
-      s.lcl_apilable = null;
-      s.step = "mar_origen";
-      await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).");
-    }
-  }
-  else if (btnId==="lcl_api_si"){
-    s.lcl_apilable = "Sí";
-    s.step="mar_origen";
-    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
-  }
-  else if (btnId==="lcl_api_no"){
-    s.lcl_apilable = "No";
-    s.step="mar_origen";
-    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).");
-  }
-  else if (btnId==="lcl_api_ns"){
-    s.lcl_apilable = "No lo sé (cotizado como apilable)";
-    s.step="mar_origen";
-    await sendText(from,"📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).\n\n_Nota: La carga se cotizará como apilable. Es importante confirmar este dato con tu proveedor._");
-  }
-  else if (btnId==="aer_carga" || btnId==="aer_courier"){
-    s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
-    if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,"✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai)."); }
-    else { s.step="courier_pf"; await sendButtons(from,"Para *Courier*, ¿quién importa?",[{id:"pf","title":"👤 Persona Física"},{id:"emp","title":"🏢 Empresa"}]); }
-  }
-      else if (btnId==="pf" || btnId==="emp"){ 
+      else if (["mar_FCL20","mar_FCL40","mar_FCL40HC"].includes(btnId)){
+        const cont = btnId==="mar_FCL20" ? "20" : btnId==="mar_FCL40" ? "40" : "40HC";
+        if (s.flow === "calc") {
+          s.calc_maritimo_tipo = "FCL"; s.calc_contenedor = cont; s.step = "c_mar_origen";
+          await sendText(from, `📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).${HINT_MENU}`);
+        } else {
+          s.maritimo_tipo = "FCL"; s.contenedor = cont; s.lcl_tn = null; s.lcl_m3 = null; s.lcl_apilable = null;
+          s.step = "mar_origen";
+          await sendText(from,`📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).${HINT_MENU}`);
+        }
+      }
+      else if (btnId==="lcl_api_si"){ s.lcl_apilable = "Sí"; s.step="mar_origen"; await sendText(from,`📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).${HINT_MENU}`); }
+      else if (btnId==="lcl_api_no"){ s.lcl_apilable = "No"; s.step="mar_origen"; await sendText(from,`📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).${HINT_MENU}`); }
+      else if (btnId==="lcl_api_ns"){ s.lcl_apilable = "No lo sé (cotizado como apilable)"; s.step="mar_origen"; await sendText(from,`📍 *Puerto de ORIGEN* (ej.: Shanghai / Ningbo / Shenzhen).\n\n_Nota: La carga se cotizará como apilable.${HINT_MENU}`); }
+      else if (btnId==="aer_carga" || btnId==="aer_courier"){
+        s.aereo_tipo = btnId==="aer_carga" ? "carga_general" : "courier";
+        if (s.aereo_tipo==="carga_general"){ s.step="aer_origen"; await sendText(from,`✈️ *AEROPUERTO ORIGEN* (IATA o ciudad. Ej.: PVG / Shanghai).${HINT_MENU}`); }
+        else { s.step="courier_pf"; await sendButtons(from,"Para *Courier*, ¿quién importa?",[{id:"pf","title":"👤 Persona Física"},{id:"emp","title":"🏢 Empresa"}]); }
+      }
+      else if (btnId==="pf" || btnId==="emp"){
         s.courier_pf = btnId==="pf" ? "PF" : "EMP";
-        s.step="courier_origen"; await sendText(from,"🌍 *País/Ciudad ORIGEN* (ej.: España / China / USA).");
+        s.step="courier_origen"; await sendText(from,`🌍 *País/Ciudad ORIGEN* (ej.: España / China / USA).${HINT_MENU}`);
       }
 
       else if (btnId.startsWith("fz_")) {
@@ -1910,14 +1402,15 @@ app.post("/webhook", async (req,res)=>{
         const state = s._fuzzy;
         const label = kind === "air" ? "aeropuerto" : "puerto";
         if (!state || state.kind !== kind) {
-          await sendText(from, `La selección expiró. Volvé a ingresar el ${label}.`);
+          await sendButtons(from,
+            `La selección expiró. Volvé a ingresar el ${label} o volvé al menú.`,
+            [{ id:"menu_si", title:"🏠 Menú principal" }]
+          );
           return res.sendStatus(200);
         }
 
         const prevStep = s._fuzzyPrevStep || s.step;
-        s._fuzzy = null;
-        s._fuzzyPrevStep = null;
-        s.step = prevStep;
+        s._fuzzy = null; s._fuzzyPrevStep = null; s.step = prevStep;
 
         let value = state.query;
         if (target !== "manual") {
@@ -1926,7 +1419,10 @@ app.post("/webhook", async (req,res)=>{
             value = state.options[idx].label;
             await sendText(from, `✅ Elegiste *${value}*.`);
           } else {
-            await sendText(from, `⚠️ No pude identificar la opción seleccionada.\n\nPor favor, verificá que esté bien escrito e intentá nuevamente.`);
+            await sendButtons(from,
+              `⚠️ No pude identificar la opción. Intentá nuevamente o volvé al menú.`,
+              [{ id:"menu_si", title:"🏠 Menú principal" }]
+            );
             s.step = s._fuzzyPrevStep || s.step;
             return res.sendStatus(200);
           }
@@ -1940,12 +1436,12 @@ app.post("/webhook", async (req,res)=>{
 
       else if (btnId === "retry_aer_origen") {
         s.step = "aer_origen";
-        await sendText(from, "✈️ Escribí el *AEROPUERTO ORIGEN* nuevamente (IATA o ciudad. Ej.: FRA / Frankfurt).");
+        await sendText(from, `✈️ Escribí el *AEROPUERTO ORIGEN* nuevamente (IATA o ciudad. Ej.: FRA / Frankfurt).${HINT_MENU}`);
         return res.sendStatus(200);
       }
       else if (btnId === "retry_mar_origen") {
         s.step = "mar_origen";
-        await sendText(from, "📍 Escribí el *PUERTO DE ORIGEN* nuevamente (ej.: Shanghai / Hamburg).");
+        await sendText(from, `📍 Escribí el *PUERTO DE ORIGEN* nuevamente (ej.: Shanghai / Hamburg).${HINT_MENU}`);
         return res.sendStatus(200);
       }
       else if (btnId.startsWith("fz_") && btnId.endsWith("_retry")) {
@@ -1953,15 +1449,14 @@ app.post("/webhook", async (req,res)=>{
         const label = kind === "air" ? "aeropuerto" : "puerto";
         s.step = s._fuzzyPrevStep || (kind === "air" ? "aer_origen" : "mar_origen");
         s._fuzzy = null;
-        await sendText(from, `Escribí el ${label} nuevamente:`);
+        await sendText(from, `Escribí el ${label} nuevamente:${HINT_MENU}`);
         return res.sendStatus(200);
       }
       else if (btnId==="confirmar"){ s.step="cotizar"; }
       else if (btnId==="editar"){ await sendMainActions(from); s.step="main"; }
       else if (btnId==="cancelar"){ sessions.delete(from); await sendText(from,"Solicitud cancelada. ¡Gracias!"); }
 
-      // EXW + Upsell (Courier ya no lo pregunta)
-      else if (btnId==="exw_si"){ s.step="exw_dir"; await sendText(from,"📍 *Dirección EXW* (calle, ciudad, CP, país).");
+      else if (btnId==="exw_si"){ s.step="exw_dir"; await sendText(from,`📍 *Dirección EXW* (calle, ciudad, CP, país).${HINT_MENU}`);
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","exw_si","","","","","","Cliente indicó EXW = Sí"]);
       }
       else if (btnId==="exw_no"){ s.step="upsell";
@@ -1977,181 +1472,93 @@ app.post("/webhook", async (req,res)=>{
         await endFlow(from);
       }
 
-      // ===== Calculadora (árbol + búsqueda)
+      // Calculadora
       else if (btnId==="calc_link_desc"){
         s.step="calc_link_desc_wait";
-        await sendText(from,"🔗📝 Pegá el *link del producto* o escribí una *descripción*\n\nEjemplos:\n• https://www.aliexpress.com/item/...\n• termo stanley 1 litro\n• auriculares bluetooth sony");
+        await sendText(from,`🔗📝 Pegá el *link del producto* o escribí una *descripción*\n\nEjemplos:\n• https://www.aliexpress.com/item/...\n• termo stanley 1 litro\n• auriculares bluetooth sony${HINT_MENU}`);
       }
       else if (btnId==="calc_foto"){
-        await sendText(from,"📸 *Enviá una foto de tu producto*\n\n💡 Consejos:\n✓ Que se vea clara\n✓ Con buena luz\n✓ De frente o con etiquetas visibles");
+        await sendText(from,`📸 *Enviá una foto de tu producto*\n\n💡 Consejos:\n✓ Que se vea clara\n✓ Con buena luz\n✓ De frente o con etiquetas visibles${HINT_MENU}`);
         s.step="calc_foto_wait";
       }
       else if (btnId==="calc_clasif_ok"){
-        // Usuario confirmó la clasificación
         s.step="calc_fob_unit";
-        await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
+        await sendText(from,`💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).${HINT_MENU}`);
       }
       else if (btnId==="calc_clasif_cambiar"){
-        // Usuario quiere cambiar la clasificación
-        await askProdMetodo(from);
-        s.step="calc_prod_m";
+        await askProdMetodo(from); s.step="calc_prod_m";
       }
-     else if (btnId==="calc_cat"){
-  const M = await getMatrix(); 
-  const V = indexMatrix(M);
-  const n1Raw = V.filter(x => x.niv1).map(x => x.niv1);
-  const n1 = [...new Set(n1Raw)].filter(Boolean);
-  console.log("DEBUG N1 encontrados:", n1.length, n1);
-  if (!n1.length) {
-    await sendText(from, "⚠️ No encontré industrias. Usá 'Descripción'.");
-    return res.sendStatus(200);
-  }
-  await sendList(from, "Elegí *Nivel 1: Industria*:", listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
-  s._tree = { V, n1 }; 
-  s.step="calc_n1_pick";
-}
-else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
-  const label = msg.interactive?.list_reply?.title || "";
-  s.sel_n1 = label;
-  const V = s._tree.V;
-  
-  const n2Raw = V.filter(x => {
-    const n1Match = norm(x.niv1).includes(norm(label)) || norm(label).includes(norm(x.niv1));
-    return n1Match && x.niv2;
-  }).map(x => x.niv2);
-  
-  const n2 = [...new Set(n2Raw)].filter(Boolean);
-  
-  console.log("DEBUG N1 seleccionado:", label);
-  console.log("DEBUG N2 encontrados:", n2.length, n2);
-  
-  if (!n2.length) {
-    await sendText(from, "⚠️ No encontré sectores para esta industria. Probá con 'Descripción' o escribí 'menu'.");
-    s.step = "start";
-    return res.sendStatus(200);
-  }
-  
-  await sendList(from, "Elegí *Nivel 2: Sector*:", listFrom(n2,"n2"), "Nivel 2: Sector", "Elegir");
-  s._tree.n2 = n2; 
-  s.step="calc_n2_pick";
-}
-else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
-  const label = msg.interactive?.list_reply?.title || "";
-  s.sel_n2 = label;
-  const V = s._tree.V;
-  
-  const n3Raw = V.filter(x => {
-    const n1Match = norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1));
-    const n2Match = norm(x.niv2) === norm(label);
-    return n1Match && n2Match && x.niv3;
-  }).map(x => x.niv3);
-  
-  const n3 = [...new Set(n3Raw)].filter(Boolean);
-  
-  console.log("DEBUG N2 seleccionado:", label);
-  console.log("DEBUG N3 encontrados:", n3.length, n3);
-  
-  if (!n3.length) {
-    await sendText(from, "⚠️ No encontré categorías para este sector. Escribí 'menu' para volver.");
-    s.step = "start";
-    return res.sendStatus(200);
-  }
-  
-  await sendList(from, "Elegí *Nivel 3: Categoría*:", listFrom(n3,"n3"), "Nivel 3: Categoría", "Elegir");
-  s._tree.n3 = n3; 
-  s.step="calc_n3_pick";
-}
-else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){ 
-  const label = msg.interactive?.list_reply?.title || "";
-  s.sel_n3 = label;
-  const V = s._tree.V;
-  
-  const subsRaw = V.filter(x => {
-    const n1Match = norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1));
-    const n2Match = norm(x.niv2) === norm(s.sel_n2);
-    const n3Match = norm(x.niv3) === norm(label);
-    return n1Match && n2Match && n3Match && x.sub;
-  }).map(x => x.sub);
-  
-  const subs = [...new Set(subsRaw)].filter(Boolean);
-  
-  console.log("DEBUG N3 seleccionado:", label);
-  console.log("DEBUG Subcategorías encontradas:", subs.length, subs);
-  
-  if (!subs.length) {
-    await sendText(from, "⚠️ No encontré productos para esta categoría. Escribí 'menu' para volver.");
-    s.step = "start";
-    return res.sendStatus(200);
-  }
-  
-  await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
-  s._tree.subs = subs;
-  s.step="calc_sub_pick";
-}
-else if (/^sub_\d+$/.test(btnId) && s.step === "calc_sub_pick") {
-  const label = msg.interactive?.list_reply?.title || "";
-  const clipSel = clip24(label);
-  const clipN1 = clip24(s.sel_n1 || "");
-  const clipN2 = clip24(s.sel_n2 || "");
-  const clipN3 = clip24(s.sel_n3 || "");
+      else if (btnId==="calc_cat"){
+        const M = await getMatrix();
+        const V = indexMatrix(M);
+        const n1 = [...new Set(V.filter(x => x.niv1).map(x => x.niv1))].filter(Boolean);
+        if (!n1.length) { await sendButtons(from, "⚠️ No encontré industrias. Usá 'Descripción'.", [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
+        await sendList(from, `Elegí *Nivel 1: Industria*:${HINT_MENU}`, listFrom(n1,"n1"), "Nivel 1: Industria", "Elegir");
+        s._tree = { V, n1 }; s.step="calc_n1_pick";
+      }
+      else if (/^n1_\d+$/.test(btnId) && s.step==="calc_n1_pick"){
+        const label = msg.interactive?.list_reply?.title || "";
+        s.sel_n1 = label;
+        const V = s._tree.V;
+        const n2 = [...new Set(V.filter(x => (norm(x.niv1).includes(norm(label)) || norm(label).includes(norm(x.niv1))) && x.niv2).map(x => x.niv2))].filter(Boolean);
+        if (!n2.length) { await sendButtons(from, "⚠️ No encontré sectores para esta industria.", [{id:"menu_si", title:"🏠 Menú"}]); s.step = "start"; return res.sendStatus(200); }
+        await sendList(from, `Elegí *Nivel 2: Sector*:${HINT_MENU}`, listFrom(n2,"n2"), "Nivel 2: Sector", "Elegir");
+        s._tree.n2 = n2; s.step="calc_n2_pick";
+      }
+      else if (/^n2_\d+$/.test(btnId) && s.step==="calc_n2_pick"){
+        const label = msg.interactive?.list_reply?.title || "";
+        s.sel_n2 = label;
+        const V = s._tree.V;
+        const n3 = [...new Set(V.filter(x => (norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1))) && norm(x.niv2) === norm(label) && x.niv3).map(x => x.niv3))].filter(Boolean);
+        if (!n3.length) { await sendButtons(from, "⚠️ No encontré categorías para este sector.", [{id:"menu_si", title:"🏠 Menú"}]); s.step = "start"; return res.sendStatus(200); }
+        await sendList(from, `Elegí *Nivel 3: Categoría*:${HINT_MENU}`, listFrom(n3,"n3"), "Nivel 3: Categoría", "Elegir");
+        s._tree.n3 = n3; s.step="calc_n3_pick";
+      }
+      else if (/^n3_\d+$/.test(btnId) && s.step==="calc_n3_pick"){
+        const label = msg.interactive?.list_reply?.title || "";
+        s.sel_n3 = label;
+        const V = s._tree.V;
+        const subs = [...new Set(V.filter(x => (norm(x.niv1).includes(norm(s.sel_n1)) || norm(s.sel_n1).includes(norm(x.niv1))) && norm(x.niv2) === norm(s.sel_n2) && norm(x.niv3) === norm(label) && x.sub).map(x => x.sub))].filter(Boolean);
+        if (!subs.length) { await sendButtons(from, "⚠️ No encontré productos para esta categoría.", [{id:"menu_si", title:"🏠 Menú"}]); s.step = "start"; return res.sendStatus(200); }
+        await sendList(from, `Elegí *Nivel 4: Producto / Subcategoría*:${HINT_MENU}`, listFrom(subs,"sub"), "Nivel 4: Producto", "Elegir");
+        s._tree.subs = subs; s.step="calc_sub_pick";
+      }
+      else if (/^sub_\d+$/.test(btnId) && s.step === "calc_sub_pick") {
+        const label = msg.interactive?.list_reply?.title || "";
+        const clipSel = clip24(label), clipN1 = clip24(s.sel_n1 || ""), clipN2 = clip24(s.sel_n2 || ""), clipN3 = clip24(s.sel_n3 || "");
+        const M = await getMatrix();
+        const fila = M.find(row => clip24(row.SUB || "") === clipSel && clip24(row.NIV1 || "") === clipN1 && clip24(row.NIV2 || "") === clipN2 && clip24(row.NIV3 || "") === clipN3);
+        if (!fila) { await sendButtons(from, "⚠️ No encontré datos para este producto.", [{id:"menu_si", title:"🏠 Menú"}]); s.step = "start"; return res.sendStatus(200); }
+        const categoria = fila.SUB || fila.NIV3 || label;
+        s.matriz = fila; s.categoria = categoria; s.producto_desc = [s.sel_n3 || fila.NIV3, label || categoria].filter(Boolean).join(" / ") || categoria;
+        s.step = "calc_fob_unit";
+        await sendText(from, `💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).${HINT_MENU}`);
+        return res.sendStatus(200);
+      }
+      else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
+        const title = msg.interactive?.list_reply?.title;
+        s.sel_n3 = title;
+        const { V } = s._find;
+        const subs = distinct(V.filter(x=>x.niv3===title), x=>x.sub).filter(Boolean);
+        await sendList(from, `Elegí *Nivel 4: Producto / Subcategoría*:${HINT_MENU}`, listFrom(subs,"subf"), "Nivel 4: Producto", "Elegir");
+        s._find.subs = subs; s.step="calc_find_sub_pick";
+      }
+      else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
+        const label = msg.interactive?.list_reply?.title;
+        const M = await getMatrix();
+        const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
+        s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
+        s.step="calc_fob_unit";
+        await sendText(from,`💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).${HINT_MENU}`);
+      }
 
-  const M = await getMatrix();
-  const fila = M.find(row => {
-    const subMatch = clip24(row.SUB || "") === clipSel;
-    const n1Match = clip24(row.NIV1 || "") === clipN1;
-    const n2Match = clip24(row.NIV2 || "") === clipN2;
-    const n3Match = clip24(row.NIV3 || "") === clipN3;
-    return subMatch && n1Match && n2Match && n3Match;
-  });
-
-  if (!fila) {
-    await sendText(from, "⚠️ No encontré datos para este producto. Escribí 'menu' para volver.");
-    s.step = "start";
-    return res.sendStatus(200);
-  }
-
-  const categoria = fila.SUB || fila.NIV3 || label;
-  const descParts = [s.sel_n3 || fila.NIV3, label || categoria].filter(Boolean);
-  s.matriz = fila;
-  s.categoria = categoria;
-  s.producto_desc = descParts.join(" / ") || categoria;
-
-  s.step = "calc_fob_unit";
-  await sendText(from, "💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-  return res.sendStatus(200);
-}
-// búsqueda libre picks
-else if (/^n3s_\d+$/.test(btnId) && s.step==="calc_find_n3_pick"){
-  const title = msg.interactive?.list_reply?.title;
-  s.sel_n3 = title;
-  const { V } = s._find;
-  const subs = distinct(V.filter(x=>x.niv3===title), x=>x.sub).filter(Boolean);
-  await sendList(from, "Elegí *Nivel 4: Producto / Subcategoría*:", listFrom(subs,"subf"), "Nivel 4: Producto", "Elegir");
-  s._find.subs = subs; s.step="calc_find_sub_pick";
-}
-else if (/^subf_\d+$/.test(btnId) && s.step==="calc_find_sub_pick"){
-  const label = msg.interactive?.list_reply?.title;
-  const M = await getMatrix();
-  const fila = M.find(x => clip24(x.SUB)===clip24(label)) || M[0];
-  s.matriz = fila; s.categoria = label; s.producto_desc = `${s.sel_n3} / ${label}`;
-  s.step="calc_fob_unit";
-  await sendText(from,"💵 Ingresá *FOB unitario (USD)* (ej.: 125,50).");
-}
-
-// Modo de transporte (calculadora)
-else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
-else if (btnId==="c_aereo"){
-  s.calc_modo="aereo";
-  s.step="c_aer_origen";
-  await sendText(from, "✈️ *Aeropuerto de ORIGEN*\n\nEjemplos:\n• Shanghai / PVG\n• Miami / MIA\n• Frankfurt / FRA\n\nEscribí el código IATA o ciudad:");
-}
-else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, "📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo)."); }
-else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
-else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
-else if (btnId==="calc_go"){
+      else if (btnId==="c_maritimo"){ s.calc_modo="maritimo"; s.step="c_mar_tipo"; await sendButtons(from,"Marítimo: ¿LCL o FCL?",[{id:"c_lcl",title:"LCL"},{id:"c_fcl",title:"FCL"}]); }
+      else if (btnId==="c_aereo"){ s.calc_modo="aereo"; s.step="c_aer_origen"; await sendText(from, `✈️ *Aeropuerto de ORIGEN*\n\nEjemplos:\n• Shanghai / PVG\n• Miami / MIA\n• Frankfurt / FRA${HINT_MENU}`); }
+      else if (btnId==="c_lcl"){ s.calc_maritimo_tipo="LCL"; s.step="c_mar_origen"; await sendText(from, `📍 *Puerto de ORIGEN* (ej.: Houston / Shanghai / Hamburgo).${HINT_MENU}`); }
+      else if (btnId==="c_fcl"){ s.calc_maritimo_tipo="FCL"; s.step="c_cont"; await sendContenedores(from); }
+      else if (btnId==="calc_edit"){ s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); }
+      else if (btnId==="calc_go"){
         await sendTypingIndicator(from, 3000);
-
-        // === calcular CIF+impuestos
         const M = s.matriz || { di:0, iva:0.21, iva_ad:0, iibb:0.035, iigg:RATE_IIGG, internos:0, tasa_est:TASA_ESTATISTICA, nota:"" };
         let fleteUSD = 0, fleteDetalle = "";
         try{
@@ -2161,23 +1568,13 @@ else if (btnId==="calc_go"){
           } else if (s.calc_modo==="maritimo"){
             const modalidad = s.calc_maritimo_tipo==="FCL" ? (s.calc_contenedor?`FCL${s.calc_contenedor}`:"FCL") : "LCL";
             const wmCalc = s.calc_maritimo_tipo==="LCL" ? Math.max((s.lcl_tn||0), (s.vol_cbm||0)) : null;
-            const r = await cotizarMaritimo({
-              origen: s.origen_puerto || "Shanghai",
-              modalidad,
-              wm: wmCalc,
-              m3: s.calc_maritimo_tipo==="LCL" ? s.vol_cbm : null
-            });
-            if (r){
-              fleteUSD = r.totalUSD;
-              const tiempoCalc = r.diasTransito ? ` • ${r.diasTransito} días` : "";
-              fleteDetalle = `Flete 🚢 (Marítimo ${modalidad}): USD ${fmtUSD(fleteUSD)}${tiempoCalc}`;
-            }
+            const r = await cotizarMaritimo({ origen: s.origen_puerto || "Shanghai", modalidad, wm: wmCalc, m3: s.calc_maritimo_tipo==="LCL" ? s.vol_cbm : null });
+            if (r){ fleteUSD = r.totalUSD; const tiempoCalc = r.diasTransito ? ` • ${r.diasTransito} días` : ""; fleteDetalle = `Flete 🚢 (Marítimo ${modalidad}): USD ${fmtUSD(fleteUSD)}${tiempoCalc}`; }
           }
         }catch{}
 
         const insurance = INSURANCE_RATE * (s.fob_total||0);
         const cif = (s.fob_total||0) + fleteUSD + insurance;
-
         const di     = cif * (M.di ?? 0);
         const tasa   = cif * (M.tasa_est ?? TASA_ESTATISTICA);
         const baseIVA= cif + di + tasa;
@@ -2186,42 +1583,35 @@ else if (btnId==="calc_go"){
         const iibb   = cif * (M.iibb ?? 0.035);
         const iigg   = baseIVA * (M.iigg ?? RATE_IIGG);
         const internos = (M.internos ?? 0) > 0 ? cif * (M.internos||0) : 0;
-
         const impTotal = di + tasa + iva + ivaAd + iibb + iigg + internos;
         const costoAdu = cif + impTotal;
 
         const body = [
-"📦 *Resultado estimado (FOB → CIF)*",
-"",
-`FOB total: USD ${fmtUSD(s.fob_total)} (${s.cantidad||0} u. × ${fmtUSD(s.fob_unit||0)})`,
-`${fleteDetalle || "Flete: *sin tarifa* (seguimos el cálculo y te contactamos)"}`,
-`Seguro (${(INSURANCE_RATE*100).toFixed(1)}%): USD ${fmtUSD(insurance)}`,
-"━━━━━━━━━━━━━━━",
-`CIF: USD ${fmtUSD(cif)}`,
-"",
-"🏛️ *Impuestos*",
-`DI (${((M.di||0)*100).toFixed(1)}%): USD ${fmtUSD(di)}`,
-`Tasa Estadística (${((M.tasa_est ?? TASA_ESTATISTICA)*100).toFixed(1)}% CIF): USD ${fmtUSD(tasa)}`,
-`IVA (${((M.iva||0)*100).toFixed(1)}%): USD ${fmtUSD(iva)}`,
-`IVA Adic. (${((M.iva_ad||0)*100).toFixed(1)}%): USD ${fmtUSD(ivaAd)}`,
-`IIBB (${((M.iibb||0)*100).toFixed(1)}%): USD ${fmtUSD(iibb)}`,
-`IIGG (${((M.iigg??RATE_IIGG)*100).toFixed(1)}%): USD ${fmtUSD(iigg)}` + ((M.internos||0)>0?`\nInternos (${(M.internos*100).toFixed(1)}%): USD ${fmtUSD(internos)}`:""),
-"━━━━━━━━━━━━━━━",
-`📊 Total impuestos: USD ${fmtUSD(impTotal)}`,
-"",
-"💰 *Costo final (CIF + imp.)*",
-`Costo aduanero: USD ${fmtUSD(costoAdu)}`,
-"",
-`➡️ Costo unitario final: USD ${fmtUSD((costoAdu/(s.cantidad||1))||0)}`,
-`📈 Incremento sobre FOB: +${(((costoAdu/(s.fob_total||1))-1)*100).toFixed(2)}%`,
-"",
-"📝 *Notas:*",
-...(M.nota? M.nota.split("\n").map(x=>"* "+x.trim()) : []),
-"* No contempla gastos locales (liberación, despachante, almacenaje, etc.)."
-].join("\n");
+          "📦 *Resultado estimado (FOB → CIF)*","",
+          `FOB total: USD ${fmtUSD(s.fob_total)} (${s.cantidad||0} u. × ${fmtUSD(s.fob_unit||0)})`,
+          `${fleteDetalle || "Flete: *sin tarifa* (seguimos el cálculo y te contactamos)"}`,
+          `Seguro (${(INSURANCE_RATE*100).toFixed(1)}%): USD ${fmtUSD(insurance)}`,
+          "━━━━━━━━━━━━━━━",
+          `CIF: USD ${fmtUSD(cif)}`, "",
+          "🏛️ *Impuestos*",
+          `DI (${((M.di||0)*100).toFixed(1)}%): USD ${fmtUSD(di)}`,
+          `Tasa Estadística (${((M.tasa_est ?? TASA_ESTATISTICA)*100).toFixed(1)}% CIF): USD ${fmtUSD(tasa)}`,
+          `IVA (${((M.iva||0)*100).toFixed(1)}%): USD ${fmtUSD(iva)}`,
+          `IVA Adic. (${((M.iva_ad||0)*100).toFixed(1)}%): USD ${fmtUSD(ivaAd)}`,
+          `IIBB (${((M.iibb||0)*100).toFixed(1)}%): USD ${fmtUSD(iibb)}`,
+          `IIGG (${((M.iigg??RATE_IIGG)*100).toFixed(1)}%): USD ${fmtUSD(iigg)}` + ((M.internos||0)>0?`\nInternos (${(M.internos*100).toFixed(1)}%): USD ${fmtUSD(internos)}`:""),
+          "━━━━━━━━━━━━━━━",
+          `📊 Total impuestos: USD ${fmtUSD(impTotal)}`, "",
+          "💰 *Costo final (CIF + imp.)*",
+          `Costo aduanero: USD ${fmtUSD(costoAdu)}`, "",
+          `➡️ Costo unitario final: USD ${fmtUSD((costoAdu/(s.cantidad||1))||0)}`,
+          `📈 Incremento sobre FOB: +${(((costoAdu/(s.fob_total||1))-1)*100).toFixed(2)}%`, "",
+          "📝 *Notas:*",
+          ...(M.nota? M.nota.split("\n").map(x=>"* "+x.trim()) : []),
+          "* No contempla gastos locales (liberación, despachante, almacenaje, etc.)."
+        ].join("\n");
 
         await sendText(from, body);
-
         await logCalculo([
           new Date().toISOString(), from, s.empresa, (s.producto_desc||s.categoria||s.sel_n3||""), (s.matriz?.SUB||s.matriz?.NIV3||""),
           s.fob_unit, s.cantidad, s.fob_total, s.peso_kg, s.vol_cbm,
@@ -2229,7 +1619,6 @@ else if (btnId==="calc_go"){
           insurance, fleteUSD, cif, di, tasa, iva, ivaAd, iibb, iigg, internos, impTotal, costoAdu
         ]);
 
-        // pedir email corporativo
         s.step = "ask_if_email";
         await sendButtons(from, "📧 ¿Deseás que te enviemos la cotización por correo?", [
           { id:"email_si", title:"✅ Sí" },
@@ -2238,14 +1627,13 @@ else if (btnId==="calc_go"){
       }
       else if (btnId==="email_si"){
         s.step = "ask_email";
-        await sendText(from, "Dejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_");
+        await sendText(from, `Dejanos un *email corporativo* (ej.: nombre@empresa.com.ar).\n_(No se aceptan gmail, yahoo, hotmail, outlook)_${HINT_MENU}`);
       }
       else if (btnId==="email_no"){
         await sendText(from,"¡Gracias! Nuestro equipo te contactará a la brevedad.");
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","email_rechazado", "", "", "", "", "", "", "Usuario no desea recibir email"]);
         await endFlow(from);
       }
-      // rating + volver
       else if (/^rate_[1-5]$/.test(btnId)){
         const val = Number(btnId.split("_")[1]);
         await sendText(from,"¡Gracias por tu calificación! ⭐");
@@ -2279,7 +1667,7 @@ else if (btnId==="calc_go"){
           {key:"BS70", title:"BS AS ≤ 70 km"},
           {key:"BS100",title:"BS AS ≤ 100 km"},
         ];
-        await sendList(from, "Elegí *Distancia*:", dists.map((d,i)=>({id:`ld_${i}`,title:d.title})), "Distancia", "Elegir");
+        await sendList(from, `Elegí *Distancia*:${HINT_MENU}`, dists.map((d,i)=>({id:`ld_${i}`,title:d.title})), "Distancia", "Elegir");
         s._localDists = dists;
       }
       else if (/^ld_\d+$/.test(btnId) && s.flow==="local" && s.step==="local_dist"){
@@ -2287,7 +1675,6 @@ else if (btnId==="calc_go"){
         const distKey = s._localDists.find(x=>x.title===title)?.key || "CABA";
         s.local_dist = distKey;
 
-        // Buscar valor en sheet
         const rows = await readTabRange(TAR_SHEET_ID, TAB_LOCAL, "A1:Z10000", ["fletelocal","local"]);
         const header = rows[0], data = rows.slice(1);
         const iVeh  = headerIndex(header,"vehiculo","vehículo");
@@ -2301,35 +1688,34 @@ else if (btnId==="calc_go"){
 
         const tipoWanted = s.local_tipo==="refrig"?"refrigerado":s.local_tipo==="pelig"?"carga peligrosa":"carga seca";
         const row = data.find(r => norm(r[iCap])===norm(s.local_cap) && norm(r[iTipo]).includes(tipoWanted));
-        if (!row){ await sendText(from,"❌ No encontré tarifa para esa combinación en *Flete Local*."); return res.sendStatus(200); }
+        if (!row){
+          await sendButtons(from,
+            "❌ No encontré tarifa para esa combinación en *Flete Local*.",
+            [{ id:"menu_si", title:"🏠 Volver al menú" }]
+          );
+          return res.sendStatus(200);
+        }
 
         const col = distKey==="CABA"?iCABA:distKey==="BS30"?i30:distKey==="BS50"?i50:distKey==="BS70"?i70:i100;
         const monto = toNum(row[col]);
 
-        // Guardar datos para usar después
         s._local_monto = monto;
         s._local_distTitle = title;
         s._local_vehiculo = row[iVeh];
 
         const texto = [
-          "🚛 *Cotización Flete AMBA*",
-          "",
+          "🚛 *Cotización Flete AMBA*","",
           `📦 *Capacidad:* ${s.local_cap}`,
           `🏷️ *Tipo:* ${s.local_tipo==="refrig"?"Refrigerada":s.local_tipo==="pelig"?"IMO / Peligrosa":"Carga Seca"}`,
           `📍 *Distancia:* ${title}`,
           row[iVeh] ? `🚚 *Vehículo:* ${row[iVeh]}` : "",
-          "",
-          `💰 *Total:* $ ${fmtARS(monto)}`,
-          "",
-          "_Valor no incluye IVA_",
-          "",
+          "", `💰 *Total:* $ ${fmtARS(monto)}`, "",
+          "_Valor no incluye IVA_", "",
           `*Validez:* ${VALIDEZ_DIAS} días`
         ].filter(Boolean).join("\n");
         await sendText(from, texto);
-
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","flete_local", s.local_cap, title, "", "", s.local_tipo, monto, "Flete local"]);
 
-        // Preguntar por fecha de retiro
         s.step = "local_fecha_ask";
         await sendButtons(from, "📅 ¿Querés programar una fecha de RETIRO?", [
           { id:"lfecha_si", title:"✅ Sí" },
@@ -2337,202 +1723,130 @@ else if (btnId==="calc_go"){
         ]);
       }
 
-      // === Flete Nacional - Button handlers ===
-      // Handler de selección de región
+      // === Flete Nacional ===
       else if (/^nreg_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_region"){
         const regiones = ["Patagonia Norte", "Patagonia Atlántica", "Patagonia Sur", "Cuyo", "Centro", "NOA", "Pampeana", "Litoral"];
         const idx = Number(btnId.split("_")[1]);
         const regionSeleccionada = regiones[idx];
         s._regionSeleccionada = regionSeleccionada;
-
-        // Mostrar destinos de esa región
         const destinosRegion = s._destinosPorRegion[regionSeleccionada] || [];
-        if (destinosRegion.length === 0) {
-          await sendText(from,`❌ No hay destinos en ${regionSeleccionada}. Contactá a hola@conektarsa.com`);
-          return res.sendStatus(200);
-        }
-
+        if (destinosRegion.length === 0) { await sendButtons(from, `❌ No hay destinos en ${regionSeleccionada}.`, [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
         s.step = "nacional_destino";
         const rows_list = destinosRegion.slice(0,10).map((d,i)=>({id:`ndest_${i}`, title:clip24(d)}));
-        await sendList(from, `📍 Elegí la ciudad en *${regionSeleccionada}*:`, rows_list, "Destinos", "Elegir");
+        await sendList(from, `📍 Elegí la ciudad en *${regionSeleccionada}*:${HINT_MENU}`, rows_list, "Destinos", "Elegir");
       }
-      // Handler de selección de ciudad
       else if (/^ndest_\d+$/.test(btnId) && s.flow==="nacional" && s.step==="nacional_destino"){
         const title = msg.interactive?.list_reply?.title || "";
         const destinosRegion = s._destinosPorRegion[s._regionSeleccionada] || [];
         const idx = Number(btnId.split("_")[1]);
         s.nacional_destino = destinosRegion[idx] || title;
         s.step = "nacional_origen";
-        await sendText(from,`📍 Destino: *${s.nacional_destino}*\n\n¿Desde qué ciudad saldrá la carga? (Ciudad de origen)\n\nEjemplo: Buenos Aires`);
+        await sendText(from,`📍 Destino: *${s.nacional_destino}*\n\n¿Desde qué ciudad saldrá la carga?\n\nEjemplo: Buenos Aires${HINT_MENU}`);
       }
       else if (btnId==="nfecha_si" && s.flow==="nacional"){
         s.step = "nacional_fecha_input";
-        await sendText(from,"📅 Ingresá la fecha deseada para el ENVÍO (ej.: 15/03/2025)");
+        await sendText(from,`📅 Ingresá la fecha deseada para el ENVÍO (ej.: 15/03/2025)${HINT_MENU}`);
       }
       else if (btnId==="nfecha_no" && s.flow==="nacional"){
         s.fecha_transporte = null;
         await procesarCotizacionNacional(from, s);
       }
-
-      // === Flete AMBA (Local) - Button handlers para fecha ===
       else if (btnId==="lfecha_si" && s.flow==="local"){
         s.step = "local_fecha_input";
-        await sendText(from,"📅 Ingresá la fecha deseada para el RETIRO (ej.: 15/03/2025)");
+        await sendText(from,`📅 Ingresá la fecha deseada para el RETIRO (ej.: 15/03/2025)${HINT_MENU}`);
       }
       else if (btnId==="lfecha_no" && s.flow==="local"){
         s.fecha_transporte = null;
-        // Finalizar flujo AMBA
         await endFlow(from);
       }
 
       if (s.step !== "cotizar") return res.sendStatus(200);
     }
 
-    /* ===== IMÁGENES (análisis de productos) ===== */
+    /* ===== IMÁGENES ===== */
     if (type === "image" && s.step === "calc_foto_wait") {
       await sendTypingIndicator(from, 3000);
-
-      // Obtener URL de la imagen desde WhatsApp
       const imageId = msg.image?.id;
-      if (!imageId) {
-        await sendText(from, "⚠️ No pude recibir la imagen. Intentá enviarla de nuevo.");
-        return res.sendStatus(200);
-      }
+      if (!imageId) { await sendText(from, "⚠️ No pude recibir la imagen. Intentá enviarla de nuevo."); return res.sendStatus(200); }
 
-      // Obtener la URL de la imagen desde WhatsApp Media API
       let imageUrl;
       try {
-        const mediaResponse = await fetch(
-          `https://graph.facebook.com/${API_VERSION}/${imageId}`,
-          {
-            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
-          }
-        );
+        const mediaResponse = await fetch(`https://graph.facebook.com/${API_VERSION}/${imageId}`, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } });
         const mediaData = await mediaResponse.json();
         imageUrl = mediaData.url;
       } catch (err) {
         console.error("ERROR obteniendo URL de imagen:", err);
-        await sendText(from, "❌ Hubo un error al procesar la imagen. Intentá de nuevo o usá otro método.");
-        await sendButtons(from, "¿Querés intentar de otra forma?", [
+        await sendButtons(from, "❌ Hubo un error al procesar la imagen.", [
           { id:"calc_link_desc", title:"🔗 Link o Descrip." },
-          { id:"calc_cat", title:"🔎 Categorías" }
+          { id:"calc_cat", title:"🔎 Categorías" },
+          { id:"menu_si", title:"🏠 Menú" }
         ]);
         return res.sendStatus(200);
       }
 
-      // Analizar con Claude Vision
       await sendText(from, "📸 Analizando la imagen...");
       const resultado = await analizarImagenProducto(imageUrl);
 
       if (!resultado.ok) {
-        await sendText(from, resultado.mensaje);
-        await sendButtons(from, "¿Querés intentar de otra forma?", [
+        await sendButtons(from, resultado.mensaje, [
           { id:"calc_foto", title:"📸 Otra foto" },
           { id:"calc_link_desc", title:"🔗 Link o Descrip." },
-          { id:"calc_cat", title:"🔎 Categorías" }
+          { id:"menu_si", title:"🏠 Menú" }
         ]);
         return res.sendStatus(200);
       }
 
-      // Si el producto es muy complejo, escalar directo a asesor
       if (resultado.requiere_asesor || resultado.complejidad === "alta") {
         s.step = "waiting_asesor";
         await sendText(from,
           `📸 Identifiqué: *${resultado.producto}*\n\n` +
           `🚨 Este producto requiere asesoramiento especializado.\n\n` +
-          `¿Por qué?\n` +
-          `✓ Clasificación compleja\n` +
-          `✓ Múltiples regulaciones aplicables\n` +
-          `✓ Requiere análisis detallado\n\n` +
           `💼 Un especialista te contactará en 4 horas.\n\n` +
-          `Datos registrados:\n` +
-          `━━━━━━━━━━━━━━━\n` +
-          `📦 ${resultado.producto}\n` +
-          `📸 Imagen adjunta\n` +
-          `🏢 ${s.empresa || "No especificada"}\n` +
-          `🔖 Prioridad: ALTA\n` +
-          `━━━━━━━━━━━━━━━\n\n` +
-          `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
+          `Datos registrados:\n━━━━━━━━━━━━━━━\n` +
+          `📦 ${resultado.producto}\n🏢 ${s.empresa || "No especificada"}\n` +
+          `━━━━━━━━━━━━━━━\n\n${HINT_MENU}`
         );
         await sendButtons(from, "También podés:", [
           { id:"calc_cat", title:"🔎 Categorías" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
         await logProductoNoClasificado(from, s.empresa, resultado.producto, resultado.palabrasClave, "imagen_compleja");
-        await logSolicitud([
-          new Date().toISOString(),
-          from,
-          "",
-          s.empresa,
-          "whatsapp",
-          "escalar_asesor_imagen",
-          "",
-          "",
-          "",
-          "",
-          "",
-          `Producto complejo con imagen: ${resultado.producto}`
-        ]);
+        await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp", "escalar_asesor_imagen", "", "", "", "", "", `Producto complejo con imagen: ${resultado.producto}`]);
         return res.sendStatus(200);
       }
 
-      // Buscar en TAGS con las palabras extraídas
       s.producto_desc = resultado.producto;
       const resultadosBusqueda = await buscarProductoEnTags(resultado.palabrasClave);
 
       if (resultadosBusqueda.length === 0 || resultadosBusqueda[0].score < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES) {
-        // ESCALAR A ASESOR
         s.step = "waiting_asesor";
         await sendText(from,
           `📸 Identifiqué: *${resultado.producto}*\n\n` +
           `⚠️ No encontré una categoría clara para este producto.\n\n` +
           `💬 Te conecto con un asesor.\n\n` +
-          `Datos registrados:\n` +
-          `━━━━━━━━━━━━━━━\n` +
-          `📦 ${resultado.producto}\n` +
-          `📸 Imagen adjunta\n` +
-          `🏢 ${s.empresa || "No especificada"}\n` +
-          `━━━━━━━━━━━━━━━\n\n` +
-          `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
+          `Datos registrados:\n━━━━━━━━━━━━━━━\n` +
+          `📦 ${resultado.producto}\n🏢 ${s.empresa || "No especificada"}\n` +
+          `━━━━━━━━━━━━━━━\n\n${HINT_MENU}`
         );
         await sendButtons(from, "También podés:", [
           { id:"calc_cat", title:"🔎 Categoria" },
           { id:"menu_si", title:"🏠 Volver al menú" }
         ]);
         await logProductoNoClasificado(from, s.empresa, resultado.producto, resultado.palabrasClave, "imagen");
-        await logSolicitud([
-          new Date().toISOString(),
-          from,
-          "",
-          s.empresa,
-          "whatsapp",
-          "escalar_asesor_imagen",
-          "",
-          "",
-          "",
-          "",
-          "",
-          `Producto con imagen sin clasificar: ${resultado.producto}`
-        ]);
+        await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp", "escalar_asesor_imagen", "", "", "", "", "", `Producto con imagen sin clasificar: ${resultado.producto}`]);
         return res.sendStatus(200);
       }
 
-      // Encontró categoría - Mostrar con confirmación
       const mejor = resultadosBusqueda[0];
-      s.matriz = mejor.fila;
-      s.categoria = mejor.categoria;
-      s.sel_n1 = mejor.fila.NIV1;
-      s.sel_n2 = mejor.fila.NIV2;
-      s.sel_n3 = mejor.fila.NIV3;
+      s.matriz = mejor.fila; s.categoria = mejor.categoria;
+      s.sel_n1 = mejor.fila.NIV1; s.sel_n2 = mejor.fila.NIV2; s.sel_n3 = mejor.fila.NIV3;
 
-      const mensaje =
+      await sendText(from,
         `📸 Identifiqué: *${resultado.producto}*\n\n` +
         `✅ Categoría encontrada:\n   *${mejor.categoria}*\n\n` +
         `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
-        `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
-        `¿Es correcto?`;
-
-      await sendText(from, mensaje);
+        `💡 Coincide con: ${mejor.matches.join(", ")}\n\n¿Es correcto?`
+      );
       await sendButtons(from, "Confirmá o cambiá:", [
         { id:"calc_clasif_ok", title:"✅ Sí, continuar" },
         { id:"calc_clasif_cambiar", title:"🔄 Cambiar categoría" }
@@ -2554,94 +1868,56 @@ else if (btnId==="calc_go"){
         return res.sendStatus(200);
       }
 
-      // Email corporativo
       if (s.step==="ask_email"){
         const mail = text.trim();
         if (!isCorporateEmail(mail)){
-          await sendText(from, "⚠️ Por favor ingresá un *correo corporativo válido* (ej.: nombre@empresa.com.ar). Evitá gmail/yahoo/hotmail/outlook.");
+          await sendText(from, `⚠️ Por favor ingresá un *correo corporativo válido* (ej.: nombre@empresa.com.ar). Evitá gmail/yahoo/hotmail/outlook.${HINT_MENU}`);
           return res.sendStatus(200);
         }
         s.email = mail;
         await sendText(from, "¡Perfecto! Guardamos tu correo para el envío de la cotización. ✅");
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","email", "", "", "", "", "", "", `email=${mail}`]);
-
-        // si no hay upsell pendiente, pedimos rating/cierre
         await upsellDespacho(from); s.step="upsell";
         return res.sendStatus(200);
       }
 
-      // Cotizador clásico
       if (s.step==="mar_origen"){
         await sendTypingIndicator(from, 2000);
-        if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" }))
-          return res.sendStatus(200);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "mar_origen" })) return res.sendStatus(200);
       }
       if (s.step==="aer_origen"){
         await sendTypingIndicator(from, 2000);
-        if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" }))
-          return res.sendStatus(200);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "aer_origen" })) return res.sendStatus(200);
       }
       if (s.step==="aer_peso"){
         const peso = toNum(text);
-        if (isNaN(peso) || peso < 0) {
-          await sendText(from,"⚠️ Ingresá un *número válido* para el peso (ej.: 1232).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
-        s.peso_kg = Math.max(0, Math.round(peso));
-        s.vol_cbm = 0; // No se pregunta peso volumétrico, se deja en 0
-        await askResumen(from, s);
-        return res.sendStatus(200);
+        if (isNaN(peso) || peso < 0) { await sendText(from,`⚠️ Ingresá un *número válido* para el peso (ej.: 1232).${HINT_MENU}`); return res.sendStatus(200); }
+        s.peso_kg = Math.max(0, Math.round(peso)); s.vol_cbm = 0;
+        await askResumen(from, s); return res.sendStatus(200);
       }
       if (s.step==="courier_origen"){
         const input = norm(text);
-
-        // Validar que el país exista en nuestro catálogo
         const region = COUNTRY_TO_REGION[input];
-
         if (!region) {
-          // Intentar match parcial
           const keys = Object.keys(COUNTRY_TO_REGION);
           const match = keys.find(k => k.includes(input) || input.includes(k));
-
-          if (match) {
-            s.origen_aeropuerto = match;
-            await sendText(from, `✅ Usaremos *${match}*.`);
-          } else {
-            await sendText(from,
-              `❌ No reconozco "${text}" como país válido.\n\n` +
-              `Ejemplos: España, China, USA, Alemania, Brasil.\n\n` +
-              `Escribí el país nuevamente:`
-            );
-            return res.sendStatus(200);
-          }
-        } else {
-          s.origen_aeropuerto = input;
-        }
-
-        s.step="courier_peso";
-        await sendText(from,"⚖️ *Peso (kg)* (podés usar decimales).");
-        return res.sendStatus(200);
+          if (match) { s.origen_aeropuerto = match; await sendText(from, `✅ Usaremos *${match}*.`); }
+          else { await sendText(from, `❌ No reconozco "${text}" como país válido.\n\nEjemplos: España, China, USA, Alemania, Brasil.\n\nEscribí el país nuevamente:${HINT_MENU}`); return res.sendStatus(200); }
+        } else { s.origen_aeropuerto = input; }
+        s.step="courier_peso"; await sendText(from,`⚖️ *Peso (kg)* (podés usar decimales).${HINT_MENU}`); return res.sendStatus(200);
       }
       if (s.step==="courier_peso"){
         const peso = toNum(text);
-        if (isNaN(peso) || peso <= 0) {
-          await sendText(from,"⚠️ Ingresá un *número válido* para el peso (ej.: 25.5).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
+        if (isNaN(peso) || peso <= 0) { await sendText(from,`⚠️ Ingresá un *número válido* para el peso (ej.: 25.5).${HINT_MENU}`); return res.sendStatus(200); }
         s.peso_kg = peso; await askResumen(from, s); return res.sendStatus(200);
       }
       if (s.step==="ter_origen"){ s.origen_direccion = text; await askResumen(from, s); return res.sendStatus(200); }
 
-      // LCL preguntas
-      if (s.step==="lcl_tn"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,"⚠️ Ingresá *toneladas válidas* (ej.: 2.5 o 2,5).\nNo uses letras ni símbolos."); return res.sendStatus(200);} s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,"📦 *Volumen total (m³)* (ej.: 8,5)"); return res.sendStatus(200); }
+      if (s.step==="lcl_tn"){ const n = toNum(text); if(!isFinite(n) || n < 0){await sendText(from,`⚠️ Ingresá *toneladas válidas* (ej.: 2.5 o 2,5).${HINT_MENU}`); return res.sendStatus(200);} s.lcl_tn=n; s.step="lcl_m3"; await sendText(from,`📦 *Volumen total (m³)* (ej.: 8,5)${HINT_MENU}`); return res.sendStatus(200); }
       if (s.step==="lcl_m3"){
         const n = toNum(text);
-        if(!isFinite(n) || n < 0){
-          await sendText(from,"⚠️ Ingresá *m³ válidos* (ej.: 8.5 o 8,5).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
-        s.lcl_m3 = n;
-        s.step = "lcl_apilable";
+        if(!isFinite(n) || n < 0){ await sendText(from,`⚠️ Ingresá *m³ válidos* (ej.: 8.5 o 8,5).${HINT_MENU}`); return res.sendStatus(200); }
+        s.lcl_m3 = n; s.step = "lcl_apilable";
         await sendButtons(from, "📦 ¿La carga es *apilable*?", [
           { id:"lcl_api_si", title:"✅ Sí" },
           { id:"lcl_api_no", title:"❌ No" },
@@ -2653,364 +1929,210 @@ else if (btnId==="calc_go"){
       // === Flete Nacional ===
       if (s.step==="nacional_m3"){
         const m3 = toNum(text);
-        if (isNaN(m3) || m3 <= 0) {
-          await sendText(from,"⚠️ Ingresá un *número válido* para m³ (ej.: 3.5).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
+        if (isNaN(m3) || m3 <= 0) { await sendText(from,`⚠️ Ingresá un *número válido* para m³ (ej.: 3.5).${HINT_MENU}`); return res.sendStatus(200); }
         if (m3 > 10) {
-          await sendText(from,
-            `⚠️ *${fmt(m3)} m³ supera el límite de 10 m³ para LTL.*\n\n` +
-            `Para cargas de este volumen te recomendamos *FTL (camión completo)*.\n\n` +
-            `📧 Contactanos para una cotización personalizada:\nhola@conektarsa.com`
-          );
-          await endFlow(from);
-          return res.sendStatus(200);
+          await sendText(from, `⚠️ *${fmt(m3)} m³ supera el límite de 10 m³ para LTL.*\n\nPara cargas de este volumen te recomendamos *FTL (camión completo)*.\n\n📧 Contactanos para una cotización personalizada:\nhola@conektarsa.com`);
+          await endFlow(from); return res.sendStatus(200);
         }
-        s.nacional_m3 = m3;
-        s.step = "nacional_tn";
-        await sendText(from,"⚖️ Ahora ingresá las *TONELADAS (TN)* de tu carga.\n\nEjemplo: 2.5");
+        s.nacional_m3 = m3; s.step = "nacional_tn";
+        await sendText(from,`⚖️ Ahora ingresá las *TONELADAS (TN)* de tu carga.\n\nEjemplo: 2.5${HINT_MENU}`);
         return res.sendStatus(200);
       }
       if (s.step==="nacional_tn"){
         const tn = toNum(text);
-        if (isNaN(tn) || tn <= 0) {
-          await sendText(from,"⚠️ Ingresá un *número válido* para toneladas (ej.: 2.5).\nNo uses letras ni símbolos.");
-          return res.sendStatus(200);
-        }
+        if (isNaN(tn) || tn <= 0) { await sendText(from,`⚠️ Ingresá un *número válido* para toneladas (ej.: 2.5).${HINT_MENU}`); return res.sendStatus(200); }
         if (tn > 10) {
-          await sendText(from,
-            `⚠️ *${fmt(tn)} TN supera el límite de 10 TN para LTL.*\n\n` +
-            `Para cargas de este peso te recomendamos *FTL (camión completo)*.\n\n` +
-            `📧 Contactanos para una cotización personalizada:\nhola@conektarsa.com`
-          );
-          await endFlow(from);
-          return res.sendStatus(200);
+          await sendText(from, `⚠️ *${fmt(tn)} TN supera el límite de 10 TN para LTL.*\n\nPara cargas de este peso te recomendamos *FTL (camión completo)*.\n\n📧 Contactanos:\nhola@conektarsa.com`);
+          await endFlow(from); return res.sendStatus(200);
         }
         s.nacional_tn = tn;
 
-        // Cargar destinos desde sheet y organizarlos por región
         try {
           const rows = await readTabRange(TAR_SHEET_ID, TAB_NACIONAL, "A1:Z10000", ["nacional","ltl"]);
-          if (!rows || rows.length < 2) {
-            await sendText(from,"❌ No pude cargar los destinos disponibles. Probá de nuevo más tarde.");
-            return res.sendStatus(200);
-          }
-          const header = rows[0];
-          const data = rows.slice(1);
+          if (!rows || rows.length < 2) { await sendButtons(from, "❌ No pude cargar los destinos disponibles.", [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
+          const header = rows[0], data = rows.slice(1);
           const iDest = headerIndex(header, "destino", "ciudad");
           const iRegion = headerIndex(header, "region", "zona");
-
-          // Guardar filas completas con región si existe
           s._nacionalData = data;
           const destinos = [...new Set(data.map(r => r[iDest]).filter(Boolean))];
-
-          if (destinos.length === 0) {
-            await sendText(from,"❌ No hay destinos configurados. Contactá a hola@conektarsa.com");
-            return res.sendStatus(200);
-          }
-
-          // Guardar todos los destinos en sesión
+          if (destinos.length === 0) { await sendButtons(from, "❌ No hay destinos configurados.", [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
           s._nacionalDestinos = destinos;
-
-          // Agrupar por región (leer de columna si existe, sino detectar automáticamente)
           s._destinosPorRegion = {};
           for (const row of data) {
-            const dest = row[iDest];
-            if (!dest) continue;
-
-            // Leer región desde planilla o detectar automáticamente
+            const dest = row[iDest]; if (!dest) continue;
             let region = iRegion >= 0 ? row[iRegion]?.trim() : null;
-            if (!region) {
-              region = detectarRegion(dest);
-            }
-
-            if (!s._destinosPorRegion[region]) {
-              s._destinosPorRegion[region] = [];
-            }
-            if (!s._destinosPorRegion[region].includes(dest)) {
-              s._destinosPorRegion[region].push(dest);
-            }
+            if (!region) region = detectarRegion(dest);
+            if (!s._destinosPorRegion[region]) s._destinosPorRegion[region] = [];
+            if (!s._destinosPorRegion[region].includes(dest)) s._destinosPorRegion[region].push(dest);
           }
 
-          // Mostrar selector de región (nuevo orden)
           s.step = "nacional_region";
-          const iconosRegion = {
-            "Patagonia Norte": "🏔️",
-            "Patagonia Atlántica": "🌊",
-            "Patagonia Sur": "❄️",
-            "Cuyo": "🍷",
-            "Centro": "🏛️",
-            "NOA": "🌄",
-            "Pampeana": "🌾",
-            "Litoral": "🌿"
-          };
+          const iconosRegion = { "Patagonia Norte":"🏔️","Patagonia Atlántica":"🌊","Patagonia Sur":"❄️","Cuyo":"🍷","Centro":"🏛️","NOA":"🌄","Pampeana":"🌾","Litoral":"🌿" };
           const ordenRegiones = ["Patagonia Norte", "Patagonia Atlántica", "Patagonia Sur", "Cuyo", "Centro", "NOA", "Pampeana", "Litoral"];
           const regiones = ordenRegiones.filter(r => s._destinosPorRegion[r]?.length > 0);
-          const regionRows = regiones.map((r,i) => ({
-            id: `nreg_${i}`,
-            title: `${iconosRegion[r] || "📍"} ${r}`,
-            description: `${s._destinosPorRegion[r].length} destinos disponibles`
-          }));
-
-          await sendList(from, "📍 Elegí la *región* de destino:", regionRows, "Regiones", "Elegir");
+          const regionRows = regiones.map((r,i) => ({ id: `nreg_${i}`, title: `${iconosRegion[r] || "📍"} ${r}`, description: `${s._destinosPorRegion[r].length} destinos disponibles` }));
+          await sendList(from, `📍 Elegí la *región* de destino:${HINT_MENU}`, regionRows, "Regiones", "Elegir");
         } catch(e) {
           console.error("Error cargando destinos nacionales:", e);
-          await sendText(from,"❌ Hubo un error cargando los destinos. Probá de nuevo más tarde.");
+          await sendButtons(from, "❌ Hubo un error cargando los destinos.", [{id:"menu_si", title:"🏠 Menú"}]);
         }
         return res.sendStatus(200);
       }
       if (s.step==="nacional_origen"){
-        s.origen_direccion = text.trim();
-        s.step = "nacional_fecha_ask";
+        s.origen_direccion = text.trim(); s.step = "nacional_fecha_ask";
         await sendButtons(from, "📅 ¿Querés programar una fecha de ENVÍO?", [
           { id:"nfecha_si", title:"✅ Sí" },
           { id:"nfecha_no", title:"❌ No" }
         ]);
         return res.sendStatus(200);
       }
-      if (s.step==="nacional_fecha_input"){
-        s.fecha_transporte = text.trim();
-        // Procesar cotización
-        await procesarCotizacionNacional(from, s);
-        return res.sendStatus(200);
-      }
+      if (s.step==="nacional_fecha_input"){ s.fecha_transporte = text.trim(); await procesarCotizacionNacional(from, s); return res.sendStatus(200); }
       if (s.step==="local_fecha_input"){
         s.fecha_transporte = text.trim();
-        // Confirmar fecha y finalizar
         await sendText(from,`✅ Fecha de retiro programada: *${s.fecha_transporte}*\n\n¡Gracias por usar Conektar! Un representante te contactará para coordinar los detalles.`);
         await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","flete_local_fecha", s.local_cap, s._local_distTitle, "", "", s.local_tipo, s._local_monto, `Fecha retiro: ${s.fecha_transporte}`]);
-        await endFlow(from);
-        return res.sendStatus(200);
+        await endFlow(from); return res.sendStatus(200);
       }
 
       if (s.step==="exw_dir"){ s.exw_dir = text; s.step="upsell"; await sendText(from,"¡Gracias! Tomamos la dirección EXW."); await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","exw_dir", s.exw_dir, "", "", "", "", "", "Dirección EXW"]); await upsellDespacho(from); return res.sendStatus(200); }
 
-      // Calculadora — búsqueda libre
-if (s.flow==="calc"){
-  if (s.step==="c_mar_origen"){
-    await sendTypingIndicator(from, 2000);
-    if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
-      return res.sendStatus(200);
-    }
-  }
-}    // ← acá hoy solo hay *un* cierre
-        if (s.step==="calc_link_desc_wait"){
-          await sendTypingIndicator(from, 3000);
+      // Calculadora
+      if (s.flow==="calc"){
+        if (s.step==="c_mar_origen"){
+          await sendTypingIndicator(from, 2000);
+          if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) return res.sendStatus(200);
+        }
+      }
 
-          let palabrasClave = [];
-          let esLink = false;
+      if (s.step==="calc_link_desc_wait"){
+        await sendTypingIndicator(from, 3000);
+        let palabrasClave = [];
+        let esLink = false;
 
-          // Detectar si es un link o descripción
-          if (text.startsWith('http://') || text.startsWith('https://')) {
-            // Es un link
-            esLink = true;
-            await sendText(from, "🔍 Analizando el link...");
-
-            const resultado = await extraerInfoDesdeURL(text);
-
-            if (resultado.error) {
-              await sendText(from, resultado.mensaje);
-              await sendButtons(from, "¿Querés intentar de otra forma?", [
-                { id:"calc_link_desc", title:"🔄 Reintentar" },
-                { id:"calc_cat", title:"📂 Buscar por categoría" },
-                { id:"menu_si", title:"🏠 Menú principal" }
-              ]);
-              s.step = "waiting_retry";
-              return res.sendStatus(200);
-            }
-
-            palabrasClave = resultado.palabrasClave;
-            s.producto_desc = resultado.titulo || text;
-          } else {
-            // Es una descripción
-            palabrasClave = extraerPalabrasClave(text);
-            s.producto_desc = text;
-          }
-
-          // Buscar en TAGS
-          const resultados = await buscarProductoEnTags(palabrasClave);
-
-          if (resultados.length === 0 || resultados[0].score < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES) {
-            // ESCALAR A ASESOR - Score muy bajo
-            s.step = "waiting_asesor";
-            await sendText(from,
-              `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
-              `⚠️ No encontré una categoría clara para este producto.\n\n` +
-              `💬 Te conecto con un asesor.\n\n` +
-              `Datos registrados:\n` +
-              `━━━━━━━━━━━━━━━\n` +
-              `📦 Producto: ${s.producto_desc}\n` +
-              `🏢 Empresa: ${s.empresa || "No especificada"}\n` +
-              `📅 Fecha: ${new Date().toLocaleDateString()}\n` +
-              `━━━━━━━━━━━━━━━\n\n` +
-              `💡 Escribí *menu* en cualquier momento para volver al menú principal.`
-            );
-            await sendButtons(from, "También podés:", [
-              { id:"calc_cat", title:"📂 Buscar por categoría" },
-              { id:"menu_si", title:"🏠 Volver al menú" }
+        if (text.startsWith('http://') || text.startsWith('https://')) {
+          esLink = true;
+          await sendText(from, "🔍 Analizando el link...");
+          const resultado = await extraerInfoDesdeURL(text);
+          if (resultado.error) {
+            await sendButtons(from, resultado.mensaje, [
+              { id:"calc_link_desc", title:"🔄 Reintentar" },
+              { id:"calc_cat", title:"📂 Por categoría" },
+              { id:"menu_si", title:"🏠 Menú" }
             ]);
-            await logProductoNoClasificado(from, s.empresa, s.producto_desc, palabrasClave, "descripcion");
-            await logSolicitud([
-              new Date().toISOString(),
-              from,
-              "",
-              s.empresa,
-              "whatsapp",
-              "escalar_asesor",
-              "",
-              "",
-              "",
-              "",
-              "",
-              `Producto no clasificado: ${s.producto_desc}`
-            ]);
-            return res.sendStatus(200);
+            s.step = "waiting_retry"; return res.sendStatus(200);
           }
+          palabrasClave = resultado.palabrasClave;
+          s.producto_desc = resultado.titulo || text;
+        } else {
+          palabrasClave = extraerPalabrasClave(text);
+          s.producto_desc = text;
+        }
 
-          // Mejor resultado
-          const mejor = resultados[0];
-          s.matriz = mejor.fila;
-          s.categoria = mejor.categoria;
-          s.sel_n1 = mejor.fila.NIV1;
-          s.sel_n2 = mejor.fila.NIV2;
-          s.sel_n3 = mejor.fila.NIV3;
+        const resultados = await buscarProductoEnTags(palabrasClave);
 
-          // Construir mensaje según el score
-          let mensaje = "";
-          if (mejor.score >= UMBRAL_CONFIANZA.AUTO_CLASIFICAR) {
-            // Score alto - Auto-clasificar con confirmación
-            mensaje =
-              `✅ *Encontré la categoría:* ${mejor.categoria}\n\n` +
-              `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
-              `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
-              `¿Es correcto?`;
-          } else {
-            // Score medio - Mostrar con confirmación
-            mensaje =
-              `✅ *Encontré:* ${mejor.categoria}\n\n` +
-              `📍 Clasificación:\n   ${mejor.clasificacion}\n\n` +
-              `💡 Coincide con: ${mejor.matches.join(", ")}\n\n` +
-              `¿Es correcto?`;
-          }
-
-          await sendText(from, mensaje);
-          await sendButtons(from, "Confirmá o cambiá:", [
-            { id:"calc_clasif_ok", title:"✅ Sí, continuar" },
-            { id:"calc_clasif_cambiar", title:"🔄 Cambiar categoría" }
+        if (resultados.length === 0 || resultados[0].score < UMBRAL_CONFIANZA.MOSTRAR_OPCIONES) {
+          s.step = "waiting_asesor";
+          await sendText(from,
+            `🔍 Busqué: *${palabrasClave.join(", ")}*\n\n` +
+            `⚠️ No encontré una categoría clara para este producto.\n\n` +
+            `💬 Te conecto con un asesor.\n\n` +
+            `Datos registrados:\n━━━━━━━━━━━━━━━\n` +
+            `📦 Producto: ${s.producto_desc}\n🏢 Empresa: ${s.empresa || "No especificada"}\n` +
+            `━━━━━━━━━━━━━━━\n\n${HINT_MENU}`
+          );
+          await sendButtons(from, "También podés:", [
+            { id:"calc_cat", title:"📂 Por categoría" },
+            { id:"menu_si", title:"🏠 Volver al menú" }
           ]);
-          s.step = "calc_clasif_confirm";
+          await logProductoNoClasificado(from, s.empresa, s.producto_desc, palabrasClave, "descripcion");
+          await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp", "escalar_asesor", "", "", "", "", "", `Producto no clasificado: ${s.producto_desc}`]);
           return res.sendStatus(200);
         }
-        if (s.step==="calc_fob_unit"){
-          const n = toNum(text);
-          if (!isFinite(n) || n <= 0){ await sendText(from,"⚠️ Ingresá un *precio válido* (ej.: 125.50 o 125,50).\nNo uses letras ni símbolos."); return res.sendStatus(200); }
-          s.fob_unit = n; s.step="calc_qty"; await sendText(from,"🔢 Ingresá la *cantidad* de unidades."); return res.sendStatus(200);
-        }
-        if (s.step==="calc_qty"){
-          const q = toNum(text);
-          if (!isFinite(q) || q <= 0) {
-            await sendText(from,"⚠️ Ingresá una *cantidad válida* (ej.: 100).\nNo uses letras ni símbolos.");
-            return res.sendStatus(200);
-          }
-          s.cantidad = Math.max(1, Math.round(q)); s.fob_total=(s.fob_unit||0)*s.cantidad;
-          s.step="calc_vol"; await sendText(from,"📦 Ingresá el *VOLUMEN total* en m³ (ej.: 8,5). Si no sabés, 0."); return res.sendStatus(200);
-        }
-        if (s.step==="calc_vol"){
-          const vol = toNum(text);
-          if (!isFinite(vol) || vol < 0) {
-            await sendText(from,"⚠️ Ingresá un *volumen válido* en m³ (ej.: 8.5 o 0).\nNo uses letras ni símbolos.");
-            return res.sendStatus(200);
-          }
-          s.vol_cbm = vol; s.step="calc_peso";
-          await sendText(from,"⚖️ Ingresá el *PESO total* en kg (ej.: 120). Si no tenés el dato, 0."); return res.sendStatus(200);
-        }
-        if (s.step==="calc_peso"){
-          const peso = toNum(text);
-          if (!isFinite(peso) || peso < 0) {
-            await sendText(from,"⚠️ Ingresá un *peso válido* en kg (ej.: 120 o 0).\nNo uses letras ni símbolos.");
-            return res.sendStatus(200);
-          }
-          s.peso_kg = peso;
-          s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
-        }
-if (s.step==="c_mar_origen" && s.flow==="calc"){
-  await sendTypingIndicator(from, 2000);
-  if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) {
-    return res.sendStatus(200);
-  }
-}
-if (s.step==="c_aer_origen" && s.flow==="calc"){
-  await sendTypingIndicator(from, 2000);
-  if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "c_aer_origen" })) {
-    return res.sendStatus(200);
-  }
-}
+
+        const mejor = resultados[0];
+        s.matriz = mejor.fila; s.categoria = mejor.categoria;
+        s.sel_n1 = mejor.fila.NIV1; s.sel_n2 = mejor.fila.NIV2; s.sel_n3 = mejor.fila.NIV3;
+
+        const mensaje = mejor.score >= UMBRAL_CONFIANZA.AUTO_CLASIFICAR
+          ? `✅ *Encontré la categoría:* ${mejor.categoria}\n\n📍 Clasificación:\n   ${mejor.clasificacion}\n\n💡 Coincide con: ${mejor.matches.join(", ")}\n\n¿Es correcto?`
+          : `✅ *Encontré:* ${mejor.categoria}\n\n📍 Clasificación:\n   ${mejor.clasificacion}\n\n💡 Coincide con: ${mejor.matches.join(", ")}\n\n¿Es correcto?`;
+
+        await sendText(from, mensaje);
+        await sendButtons(from, "Confirmá o cambiá:", [
+          { id:"calc_clasif_ok", title:"✅ Sí, continuar" },
+          { id:"calc_clasif_cambiar", title:"🔄 Cambiar categoría" }
+        ]);
+        s.step = "calc_clasif_confirm";
+        return res.sendStatus(200);
+      }
+
+      if (s.step==="calc_fob_unit"){
+        const n = toNum(text);
+        if (!isFinite(n) || n <= 0){ await sendText(from,`⚠️ Ingresá un *precio válido* (ej.: 125.50 o 125,50).${HINT_MENU}`); return res.sendStatus(200); }
+        s.fob_unit = n; s.step="calc_qty"; await sendText(from,`🔢 Ingresá la *cantidad* de unidades.${HINT_MENU}`); return res.sendStatus(200);
+      }
+      if (s.step==="calc_qty"){
+        const q = toNum(text);
+        if (!isFinite(q) || q <= 0) { await sendText(from,`⚠️ Ingresá una *cantidad válida* (ej.: 100).${HINT_MENU}`); return res.sendStatus(200); }
+        s.cantidad = Math.max(1, Math.round(q)); s.fob_total=(s.fob_unit||0)*s.cantidad;
+        s.step="calc_vol"; await sendText(from,`📦 Ingresá el *VOLUMEN total* en m³ (ej.: 8,5). Si no sabés, 0.${HINT_MENU}`); return res.sendStatus(200);
+      }
+      if (s.step==="calc_vol"){
+        const vol = toNum(text);
+        if (!isFinite(vol) || vol < 0) { await sendText(from,`⚠️ Ingresá un *volumen válido* en m³ (ej.: 8.5 o 0).${HINT_MENU}`); return res.sendStatus(200); }
+        s.vol_cbm = vol; s.step="calc_peso";
+        await sendText(from,`⚖️ Ingresá el *PESO total* en kg (ej.: 120). Si no tenés el dato, 0.${HINT_MENU}`); return res.sendStatus(200);
+      }
+      if (s.step==="calc_peso"){
+        const peso = toNum(text);
+        if (!isFinite(peso) || peso < 0) { await sendText(from,`⚠️ Ingresá un *peso válido* en kg (ej.: 120 o 0).${HINT_MENU}`); return res.sendStatus(200); }
+        s.peso_kg = peso;
+        s.step="c_modo"; await sendButtons(from,"Elegí el modo de transporte:",[{id:"c_maritimo",title:"🚢 Marítimo"},{id:"c_aereo",title:"✈️ Aéreo"}]); return res.sendStatus(200);
+      }
+      if (s.step==="c_mar_origen" && s.flow==="calc"){
+        await sendTypingIndicator(from, 2000);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "sea", action: "c_mar_origen" })) return res.sendStatus(200);
+      }
+      if (s.step==="c_aer_origen" && s.flow==="calc"){
+        await sendTypingIndicator(from, 2000);
+        if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "c_aer_origen" })) return res.sendStatus(200);
+      }
     }
 
     /* ===== COTIZAR (ejecución) ===== */
     if (s.step==="cotizar"){
       await sendTypingIndicator(from, 2500);
-
-      // DEBUG: Log para verificar qué tipo de cotización se ejecuta
-      console.log(`\n🔍 DEBUG COTIZACIÓN [${from}]`);
-      console.log(`   modo: ${s.modo}`);
-      console.log(`   aereo_tipo: ${s.aereo_tipo}`);
-      console.log(`   origen_aeropuerto: ${s.origen_aeropuerto}`);
-      console.log(`   peso_kg: ${s.peso_kg}`);
-      console.log(`   courier_pf: ${s.courier_pf}\n`);
-
       try {
         if (s.modo==="aereo" && s.aereo_tipo==="carga_general"){
-          console.log("✈️ Ejecutando cotizarAereo (carga general)");
           const r = await cotizarAereo({ origen: s.origen_aeropuerto, kg: s.peso_kg||0, vol: s.vol_cbm||0 });
           if (!r){
             await sendButtons(from,
-              `❌ No encontré esa ruta en *${TAB_AEREOS}*. ¿Qué querés hacer?`,
+              `❌ No encontré esa ruta. ¿Qué querés hacer?`,
               [
                 { id:"retry_aer_origen", title:"🔄 Otro aeropuerto" },
                 { id:"menu_si", title:"🏠 Menú principal" }
               ]
             );
-            s.step = "waiting_retry";
-            return res.sendStatus(200);
+            s.step = "waiting_retry"; return res.sendStatus(200);
           }
           const unit = `USD ${fmtUSD(r.pricePerKg)} por KG (FOB)`;
           const min  = r.applyMin ? `\n*Mínimo facturable:* ${r.minKg} kg` : "";
           const resp = `✅ *Tarifa estimada (AÉREO – Carga general)*\n${unit} + *Gastos Locales*.${min}\n\n*Kilos facturables:* ${r.facturableKg}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)}\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","aereo", s.origen_aeropuerto, r.destino, s.peso_kg||"", s.vol_cbm||"", "", r.totalUSD, `Aéreo ${s.origen_aeropuerto}→${r.destino}`]);
-
-          // Sugerencias de conveniencia
           const sugerencias = await analizarConveniencia(s);
-          if (sugerencias.length > 0) {
-            await sleep(500);
-            for (const sug of sugerencias) {
-              await sendText(from, sug);
-              await sleep(300);
-            }
-          }
+          if (sugerencias.length > 0) { await sleep(500); for (const sug of sugerencias) { await sendText(from, sug); await sleep(300); } }
         } else if (s.modo==="aereo" && s.aereo_tipo==="courier"){
-          console.log("📦 Ejecutando cotizarCourier");
-          console.log(`   pais: ${s.origen_aeropuerto}, kg: ${s.peso_kg||0}`);
           const r = await cotizarCourier({ pais: s.origen_aeropuerto, kg: s.peso_kg||0 });
-          if (!r){ await sendText(from,`❌ No pude calcular *${TAB_COURIER}*. Revisá la pestaña.`); return res.sendStatus(200); }
+          if (!r){ await sendButtons(from, `❌ No pude calcular el courier.`, [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
           const pesoUsado = r.ajustado ? r.escalonKg : s.peso_kg;
-          const precioKg = r.totalUSD; // r.totalUSD ya es el precio por kg desde la tabla
-          const total = precioKg * pesoUsado; // Calcular el total
+          const precioKg = r.totalUSD;
+          const total = precioKg * pesoUsado;
           const resp = `✅ *Tarifa estimada (COURIER)*\n*Importador:* ${s.courier_pf==="PF"?"Persona Física":"Empresa"}\n*Peso:* ${fmtUSD(pesoUsado)} kg\n*Precio por kg:* USD ${fmtUSD(precioKg)}\n*Total:* USD ${fmtUSD(total)} + *Gastos Locales*\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","courier", s.origen_aeropuerto, r.destino, s.peso_kg||"", "", s.courier_pf||"", total, `Courier ${s.origen_aeropuerto}`]);
-
-          // Sugerencias de conveniencia
           const sugerencias = await analizarConveniencia(s);
-          if (sugerencias.length > 0) {
-            await sleep(500);
-            for (const sug of sugerencias) {
-              await sendText(from, sug);
-              await sleep(300);
-            }
-          }
-          // Preguntar si desea email con botones (igual que otros flujos)
+          if (sugerencias.length > 0) { await sleep(500); for (const sug of sugerencias) { await sendText(from, sug); await sleep(300); } }
           s.step = "ask_if_email";
           await sendButtons(from, "📧 ¿Deseás que te enviemos la cotización por correo?", [
             { id:"email_si", title:"✅ Sí" },
@@ -3018,83 +2140,44 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
           ]);
           return res.sendStatus(200);
         } else if (s.modo==="maritimo"){
-          if (s.maritimo_tipo==="LCL"){ 
+          if (s.maritimo_tipo==="LCL"){
             const wm = Math.max((s.lcl_tn||0), (s.lcl_m3||0));
-            const r = await cotizarMaritimo({
-              origen: s.origen_puerto,
-              modalidad: "LCL",
-              wm,
-              m3: s.lcl_m3
-            });
+            const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad: "LCL", wm, m3: s.lcl_m3 });
             if (!r){
-              await sendButtons(from,
-                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
-                  [
-                    { id:"retry_mar_origen", title:"🔄 Otro puerto" },
-                    { id:"menu_si", title:"🏠 Menú principal" }
-                  ]
-                );
-              s.step = "waiting_retry";
-              return res.sendStatus(200);
+              await sendButtons(from, `❌ No encontré esa ruta. ¿Qué querés hacer?`, [
+                { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                { id:"menu_si", title:"🏠 Menú principal" }
+              ]);
+              s.step = "waiting_retry"; return res.sendStatus(200);
             }
             const tiempoTexto = r.diasTransito ? `⏱️ *Tiempo estimado:* ${r.diasTransito} días\n` : "";
             const voluminosoTexto = r.esVoluminoso ? `⚠️ Tarifa voluminosa aplicada (5-10 m³)\n` : "";
-
             const texto = `✅ *Tarifa estimada (Marítimo LCL)*\nW/M: ${fmtUSD(wm)} (t vs m³)\nTarifa base: USD ${fmtUSD(r.tarifaBase)} por W/M\n${voluminosoTexto}${tiempoTexto}\n*Total estimado:* USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
             await sendText(from, texto);
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", "LCL", r.totalUSD, `Marítimo LCL ${s.origen_puerto}→${r.destino} WM:${wm}`]);
-
-            // Sugerencias de conveniencia
             const sugerencias = await analizarConveniencia(s);
-            if (sugerencias.length > 0) {
-              await sleep(500);
-              for (const sug of sugerencias) {
-                await sendText(from, sug);
-                await sleep(300);
-              }
-            }
+            if (sugerencias.length > 0) { await sleep(500); for (const sug of sugerencias) { await sendText(from, sug); await sleep(300); } }
           } else {
             const modalidad = "FCL" + (s.contenedor||"");
             const r = await cotizarMaritimo({ origen: s.origen_puerto, modalidad });
             if (!r){
-              await sendButtons(from,
-                `❌ No encontré esa ruta en *${TAB_MARITIMOS}*. ¿Qué querés hacer?`,
-                [
-                  { id:"retry_mar_origen", title:"🔄 Otro puerto" },
-                  { id:"menu_si", title:"🏠 Menú principal" }
-                ]
-              );
-              s.step = "waiting_retry";
-              return res.sendStatus(200);
+              await sendButtons(from, `❌ No encontré esa ruta. ¿Qué querés hacer?`, [
+                { id:"retry_mar_origen", title:"🔄 Otro puerto" },
+                { id:"menu_si", title:"🏠 Menú principal" }
+              ]);
+              s.step = "waiting_retry"; return res.sendStatus(200);
             }
-            const partes = [
-              `✅ *Tarifa estimada (Marítimo ${modalidad})*`,
-              `USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.`,
-              `*Origen:* ${s.origen_puerto}`
-            ];
-            if (r.transit) {
-              partes.push(`⏱️ Tiempo estimado: ${r.transit}`);
-            }
-            partes.push(
-              "",
-              `*Validez:* ${VALIDEZ_DIAS} días`,
-              "*Nota:* No incluye impuestos ni gastos locales."
-            );
-            const texto = partes.join("\n");
-            await sendText(from, texto);
+            const partes = [`✅ *Tarifa estimada (Marítimo ${modalidad})*`, `USD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.`, `*Origen:* ${s.origen_puerto}`];
+            if (r.transit) partes.push(`⏱️ Tiempo estimado: ${r.transit}`);
+            partes.push("", `*Validez:* ${VALIDEZ_DIAS} días`, "*Nota:* No incluye impuestos ni gastos locales.");
+            await sendText(from, partes.join("\n"));
             await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","maritimo", s.origen_puerto, r.destino, "", "", modalidad, r.totalUSD, `Marítimo ${modalidad} ${s.origen_puerto}→${r.destino}`]);
             const sugerencias = await analizarConveniencia(s);
-            if (sugerencias.length > 0) {
-              await sleep(500);
-              for (const sug of sugerencias) {
-                await sendText(from, sug);
-                await sleep(300);
-              }
-            }
+            if (sugerencias.length > 0) { await sleep(500); for (const sug of sugerencias) { await sendText(from, sug); await sleep(300); } }
           }
         } else if (s.modo==="terrestre"){
           const r = await cotizarTerrestre({ origen: s.origen_direccion || "" });
-          if (!r){ await sendText(from,`❌ No encontré esa ruta en *${TAB_TERRESTRES}*.`); return res.sendStatus(200); }
+          if (!r){ await sendButtons(from, `❌ No encontré esa ruta terrestre.`, [{id:"menu_si", title:"🏠 Menú"}]); return res.sendStatus(200); }
           const resp = `✅ *Tarifa estimada (TERRESTRE FTL)*\nUSD ${fmtUSD(r.totalUSD)} + *Gastos Locales*.\n\n*Validez:* ${VALIDEZ_DIAS} días\n*Nota:* No incluye impuestos ni gastos locales.`;
           await sendText(from, resp);
           await logSolicitud([new Date().toISOString(), from, "", s.empresa, "whatsapp","terrestre", s.origen_direccion||"", r.destino, "", "", "FTL", r.totalUSD, `Terrestre ${s.origen_direccion}→${r.destino}`]);
@@ -3111,7 +2194,10 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
         }
       } catch(e) {
         console.error("cotizar error", e);
-        await sendText(from,"⚠️ Hubo un problema al leer la planilla. Revisá nombres de pestañas y permisos.");
+        await sendButtons(from,
+          "⚠️ Hubo un problema al leer la planilla. Revisá nombres de pestañas y permisos.",
+          [{ id:"menu_si", title:"🏠 Volver al menú" }]
+        );
       }
       return res.sendStatus(200);
     }
@@ -3122,12 +2208,12 @@ if (s.step==="c_aer_origen" && s.flow==="calc"){
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.0"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.1"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 /* ========= Start ========= */
 app.listen(PORT, ()=> {
-  console.log(`🚀 Bot v4.0 en http://localhost:${PORT}`);
+  console.log(`🚀 Bot v4.1 en http://localhost:${PORT}`);
   loadTransportCatalogs().catch(e => console.error("loadTransportCatalogs", e?.message || e));
 });
 
@@ -3183,84 +2269,37 @@ function confirmCalc(to, d){
     `• FOB unit: *USD ${fmtUSD(d.fob_unit||0)}* × *${d.cantidad||0}* = *USD ${fmtUSD(d.fob_total||0)}*`,
     `• Volumen: *${fmt(d.vol_cbm||0)} m³*  • Peso: *${fmt(d.peso_kg||0)} kg*`,
     `• Modo: *${(d.calc_modo||"").toUpperCase()}*${d.calc_modo==="maritimo" && d.calc_maritimo_tipo ? ` • ${d.calc_maritimo_tipo}`:""}${d.calc_contenedor?` • Contenedor: *${d.calc_contenedor}*`:""}`,
-    "",
-    "Incoterm: FOB",
-    "¿Confirmás para calcular?"
+    "", "Incoterm: FOB", "¿Confirmás para calcular?"
   ].join("\n");
   return sendButtons(to, lines, [
     { id:"calc_go",   title:"✅ Calcular" },
     { id:"calc_edit", title:"✏️ Editar" },
   ]);
 }
+
 /* ========= Courier cotizador ========= */
-// ✅ ÚNICA DEFINICIÓN
 async function cotizarCourierTarifas({ pais, kg }) {
   const rows = await readTabRange(TAR_SHEET_ID, TAB_COURIER, "A1:Z10000", ["courier"]);
   if (!rows.length) throw new Error("Courier vacío");
-
   const header = rows[0], data = rows.slice(1);
   const iPeso = headerIndex(header, "peso", "peso (kg)");
   const iAS   = headerIndex(header, "america sur");
   const iUS   = headerIndex(header, "usa", "usa & canada", "usa & canadá");
   const iEU   = headerIndex(header, "europa");
   const iASIA = headerIndex(header, "asia");
-
   const region = COUNTRY_TO_REGION[norm(pais)] || "europa";
-  const col = region === "america sur" ? iAS
-            : region === "usa & canadá" ? iUS
-            : region === "asia" ? iASIA
-            : iEU;
-
+  const col = region === "america sur" ? iAS : region === "usa & canadá" ? iUS : region === "asia" ? iASIA : iEU;
   const wanted = Number(kg);
   let exact = data.find(r => toNum(r[iPeso]) === wanted);
   let usado = wanted, ajustado = false;
-
   if (!exact) {
-    if (typeof COURIER_ROUND_UP !== "undefined" && COURIER_ROUND_UP) {
-      const mayores = data
-        .map(r => ({ r, p: toNum(r[iPeso]) }))
-        .filter(x => isFinite(x.p) && x.p >= wanted)
-        .sort((a, b) => a.p - b.p);
-      if (mayores.length) { exact = mayores[0].r; usado = toNum(exact[iPeso]); ajustado = true; }
+    let best = null, bestDiff = Infinity;
+    for (const r of data) {
+      const p = toNum(r[iPeso]); if (!isFinite(p)) continue;
+      const d = Math.abs(p - wanted);
+      if (d < bestDiff) { best = r; bestDiff = d; }
     }
-    if (!exact) {
-      let best = null, bestDiff = Infinity;
-      for (const r of data) {
-        const p = toNum(r[iPeso]); if (!isFinite(p)) continue;
-        const d = Math.abs(p - wanted);
-        if (d < bestDiff) { best = r; bestDiff = d; }
-      }
-      exact = best; usado = toNum(best?.[iPeso]); ajustado = true;
-    }
+    exact = best; usado = toNum(best?.[iPeso]); ajustado = true;
   }
-
-  return {
-    region,
-    escalonKg: usado,
-    ajustado,
-    totalUSD: toNum(exact?.[col]),
-    destino: "Ezeiza (EZE)"
-  };
+  return { region, escalonKg: usado, ajustado, totalUSD: toNum(exact?.[col]), destino: "Ezeiza (EZE)" };
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
