@@ -294,13 +294,13 @@ const WELCOME_TEXT =
   "💡 En cualquier momento escribí *menu* para volver al inicio.\n" +
   "📧 hola@conektarsa.com";
 
-// v4.1: sendMainActions ahora usa lista para mostrar los 4 servicios
+// v4.2: sendMainActions — 4 servicios incluyendo calculadora
 const sendMainActions = async (to) => {
   return sendList(to, "¿Qué servicio necesitás?", [
-    { id:"action_amba",          title:"🚛 Flete AMBA",             description:"CABA y Gran Buenos Aires" },
-    { id:"action_nacional",      title:"🚚 Flete Nacional",          description:"Interior del país" },
-    { id:"action_internacional", title:"🌍 Flete Internacional",     description:"Aéreo • Marítimo • Terrestre" },
-    { id:"action_calculadora",   title:"🧮 Calculadora Importación", description:"FOB → Costo final con impuestos" },
+    { id:"action_amba",          title:"🚛 Flete AMBA",           description:"CABA y Gran Buenos Aires" },
+    { id:"action_nacional",      title:"🚚 Flete Nacional",        description:"Interior del pais" },
+    { id:"action_internacional", title:"🌍 Flete Internacional",   description:"Aereo, Maritimo, Terrestre" },
+    { id:"action_calculadora",   title:"🧮 Calculadora Import.",   description:"FOB a costo final" },
   ], "Servicios", "Ver servicios");
 };
 
