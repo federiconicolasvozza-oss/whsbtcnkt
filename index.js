@@ -1,5 +1,5 @@
 // index.js — Conektar S.A. • Bot Cotizaciones + Costeo Importe + Flete Local
-// v4.1 — UX Etapa 1: menú lista, calculadora visible, recordatorios, mensajes de error mejorados
+// v4.2 — Fix: saludos redirigen al menú, fallback para mensajes no reconocidos
 
 import express from "express";
 import dotenv from "dotenv";
@@ -1292,8 +1292,10 @@ app.post("/webhook", async (req,res)=>{
 
     if (!s.welcomed) { await showWelcomeOnce(); return res.sendStatus(200); }
 
-    // Comandos globales
-    if (type==="text" && ["menu","inicio","start","volver","reset"].includes(lower)) {
+    // Comandos globales + saludos
+    const SALUDOS = ["hola","hi","hello","buenas","buen dia","buenos dias","buenas tardes","buenas noches","good morning","good afternoon","ola","holis","hey"];
+    const COMANDOS_MENU = ["menu","inicio","start","volver","reset"];
+    if (type==="text" && (COMANDOS_MENU.includes(lower) || SALUDOS.some(sal => lower.startsWith(sal)))) {
       if (lower==="inicio" || lower==="reset") { sessions.delete(from); await getS(from); }
       else { s.step = "main"; s.flow = null; }
       await sendMainActions(from);
@@ -2097,6 +2099,13 @@ app.post("/webhook", async (req,res)=>{
         await sendTypingIndicator(from, 2000);
         if (await fuzzySearchPlace({ from, s, query: text, kind: "air", action: "c_aer_origen" })) return res.sendStatus(200);
       }
+
+      // v4.2: Fallback — mensaje no reconocido en cualquier estado
+      if (s.step === "main" || s.step === "start" || s.step === "choose_modo") {
+        await sendText(from, "No entendí tu mensaje. 😅\nAcá te muestro lo que podés hacer:");
+        await sendMainActions(from);
+        return res.sendStatus(200);
+      }
     }
 
     /* ===== COTIZAR (ejecución) ===== */
@@ -2208,12 +2217,12 @@ app.post("/webhook", async (req,res)=>{
 });
 
 /* ========= HEALTH ========= */
-app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.1"));
+app.get("/", (_req,res)=>res.status(200).send("Conektar - Bot Cotizador + Costeo + Local ✅ v4.2"));
 app.get("/health", (_req,res)=>res.status(200).send("ok"));
 
 /* ========= Start ========= */
 app.listen(PORT, ()=> {
-  console.log(`🚀 Bot v4.1 en http://localhost:${PORT}`);
+  console.log(`🚀 Bot v4.2 en http://localhost:${PORT}`);
   loadTransportCatalogs().catch(e => console.error("loadTransportCatalogs", e?.message || e));
 });
 
